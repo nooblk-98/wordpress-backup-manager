@@ -3150,21 +3150,7 @@ $existingBackups = getExistingBackups();
                         <strong>Config file:</strong> <?php echo htmlspecialchars($wpConfig['_source']); ?>
                     </div>
                 <?php endif; ?>
-                <div style="margin-top: 10px;">
-                    <button type="button" class="btn-secondary" onclick="showConfigDebug()">Test wp-config parsing</button>
-                </div>
-
                 <div class="options-grid">
-                    <div class="option-card">
-                        <div class="option-title">
-                            <input type="checkbox" id="excludeUploads">
-                            Exclude uploads
-                        </div>
-                        <div class="option-help">
-                            Faster and smaller backups for media-heavy sites. (Database-only still includes media references.)
-                        </div>
-                    </div>
-
                     <div class="option-card">
                         <div class="option-title">Ignore folder names</div>
                         <input class="text-input" id="ignoreDirs" type="text" placeholder="<?php echo htmlspecialchars(implode(', ', parseIgnoreDirNames(BACKUP_IGNORE_DIRNAMES))); ?>">
