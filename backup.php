@@ -21,6 +21,33 @@ define('BACKUP_PASSWORD_MD5', '94f63e2f03239f2a6061ee2af18856a4');
 define('BACKUP_IP_WHITELIST_ENABLED', true);
 define('BACKUP_IP_WHITELIST', ['127.0.0.1', '192.168.8.0/16', '123.231.94.186']);
 define('BACKUP_TRUST_PROXY_HEADERS', false);
+// Safe Cloudflare IP ranges (used only when REMOTE_ADDR matches one of these).
+define('BACKUP_CLOUDFLARE_IP_RANGES', [
+    // IPv4
+    '173.245.48.0/20',
+    '103.21.244.0/22',
+    '103.22.200.0/22',
+    '103.31.4.0/22',
+    '141.101.64.0/18',
+    '108.162.192.0/18',
+    '190.93.240.0/20',
+    '188.114.96.0/20',
+    '197.234.240.0/22',
+    '198.41.128.0/17',
+    '162.158.0.0/15',
+    '104.16.0.0/13',
+    '104.24.0.0/14',
+    '172.64.0.0/13',
+    '131.0.72.0/22',
+    // IPv6
+    '2400:cb00::/32',
+    '2606:4700::/32',
+    '2803:f800::/32',
+    '2405:b500::/32',
+    '2405:8100::/32',
+    '2a06:98c0::/29',
+    '2c0f:f248::/32',
+]);
 
 // Optional ignore folder names (applies to wp-content backups).
 // Any directory name in this list is excluded anywhere in wp-content (e.g. "node_modules" excludes ".../node_modules/...").
@@ -44,6 +71,53 @@ define('BACKUP_DIR_FALLBACK', __DIR__ . DIRECTORY_SEPARATOR . 'wp-content' . DIR
 define('BACKUP_DIR_TMP', sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'wp-backups');
 define('BACKUP_DIR_SITE_TMP', __DIR__ . DIRECTORY_SEPARATOR . 'backup-manager-backups');
 
+// Return an array of possible client IPs, ordered by trust.
+function getClientIpCandidates(): array {
+    $candidates = [];
+    $seen = [];
+
+    $add = function (string $ip) use (&$candidates, &$seen): void {
+        if ($ip === '' || isset($seen[$ip]) || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            return;
+        }
+        $seen[$ip] = true;
+        $candidates[] = $ip;
+    };
+
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $add($remote);
+
+    $isCfEdge = isIpFromCloudflare($remote);
+    if ($isCfEdge) {
+        $add((string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
+        $add((string)($_SERVER['HTTP_TRUE_CLIENT_IP'] ?? ''));
+        $xff = (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
+        if ($xff !== '') {
+            foreach (array_map('trim', explode(',', $xff)) as $ip) {
+                $add($ip);
+            }
+        }
+    }
+
+    if (BACKUP_TRUST_PROXY_HEADERS) {
+        // WARNING: Only enable when your reverse proxy sanitizes these headers.
+        $xff = (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
+        if ($xff !== '') {
+            foreach (array_map('trim', explode(',', $xff)) as $ip) {
+                $add($ip);
+            }
+        }
+        $add((string)($_SERVER['HTTP_X_REAL_IP'] ?? ''));
+    }
+
+    return $candidates;
+}
+
+function getClientIp(): string {
+    $candidates = getClientIpCandidates();
+    return $candidates[0] ?? '';
+}
+
 // Database dump tuning (helps on large databases)
 define('DB_DUMP_INSERT_BATCH', 250);      // rows per INSERT statement
 define('DB_DUMP_LOG_EVERY_ROWS', 25000);  // progress log cadence
@@ -54,32 +128,6 @@ define('ZIP_COMPRESS_LEVEL', 2);          // 0..9 (if supported); lower = faster
 
 // Check if password is submitted
 session_start();
-
-function getClientIp(): string {
-    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
-
-    if (!BACKUP_TRUST_PROXY_HEADERS) {
-        return $remote;
-    }
-
-    // WARNING: Only enable BACKUP_TRUST_PROXY_HEADERS when your reverse proxy sanitizes these headers.
-    $xff = (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
-    if ($xff !== '') {
-        $parts = array_map('trim', explode(',', $xff));
-        foreach ($parts as $ip) {
-            if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                return $ip;
-            }
-        }
-    }
-
-    $xri = (string)($_SERVER['HTTP_X_REAL_IP'] ?? '');
-    if ($xri !== '' && filter_var($xri, FILTER_VALIDATE_IP)) {
-        return $xri;
-    }
-
-    return $remote;
-}
 
 function ipInCidr(string $ip, string $cidr): bool {
     if (strpos($cidr, '/') === false) {
@@ -125,6 +173,20 @@ function ipInCidr(string $ip, string $cidr): bool {
 
     $mask = (0xFF << (8 - $bits)) & 0xFF;
     return ((ord($ipBin[$bytes]) & $mask) === (ord($netBin[$bytes]) & $mask));
+}
+
+function isIpFromCloudflare(string $ip): bool {
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        return false;
+    }
+
+    foreach (BACKUP_CLOUDFLARE_IP_RANGES as $range) {
+        if (ipInCidr($ip, $range)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function isIpWhitelisted(string $ip): bool {
@@ -191,8 +253,18 @@ function getIgnoreDirNamesFromRequest(): array {
 
 // Optional IP restriction gate (runs before password checks)
 if (BACKUP_IP_WHITELIST_ENABLED) {
-    $clientIp = getClientIp();
-    if (!isIpWhitelisted($clientIp)) {
+    $ipCandidates = getClientIpCandidates();
+    $clientIp = $ipCandidates[0] ?? '';
+    $isAllowed = false;
+    foreach ($ipCandidates as $ip) {
+        if (isIpWhitelisted($ip)) {
+            $isAllowed = true;
+            $clientIp = $ip; // log the whitelisted match
+            break;
+        }
+    }
+
+    if (!$isAllowed) {
         if (isset($_GET['action']) || isset($_POST['action'])) {
             http_response_code(403);
             header('Content-Type: application/json; charset=utf-8');
