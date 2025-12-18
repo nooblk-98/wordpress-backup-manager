@@ -2696,6 +2696,19 @@ $existingBackups = getExistingBackups();
             font-size: 22px;
             font-weight: 700;
             letter-spacing: -0.2px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-container {
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .logo-container svg {
+            height: 40px;
+            width: auto;
         }
 
         .logout-btn {
@@ -3032,7 +3045,12 @@ $existingBackups = getExistingBackups();
 <body>
     <div class="container">
         <header class="topbar">
-            <h1>WordPress Backup Manager</h1>
+            <h1>
+                <span class="logo-container">
+                    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="294" height="588" viewBox="0 0 294 588"><defs><g><g id="glyph-0-0"><path d="M 0.640625 2.3125 L 0.640625 -9.296875 L 7.171875 -9.296875 L 7.171875 2.3125 Z M 1.390625 1.5625 L 6.421875 1.5625 L 6.421875 -8.546875 L 1.390625 -8.546875 Z M 1.390625 1.5625 "/></g><g id="glyph-0-1"><path d="M 7.40625 -8.890625 C 7.019531 -9.460938 6.519531 -9.898438 5.90625 -10.203125 C 5.300781 -10.515625 4.613281 -10.671875 3.84375 -10.671875 C 2.84375 -10.671875 1.953125 -10.414062 1.171875 -9.90625 C 0.398438 -9.394531 -0.195312 -8.691406 -0.609375 -7.796875 C -1.023438 -6.910156 -1.234375 -5.894531 -1.234375 -4.75 C -1.234375 -3.613281 -1.023438 -2.601562 -0.609375 -1.71875 C -0.191406 -0.832031 0.410156 -0.140625 1.203125 0.359375 C 2.003906 0.859375 2.925781 1.109375 3.96875 1.109375 C 5.21875 1.109375 6.242188 0.757812 7.046875 0.0625 C 7.859375 -0.632812 8.363281 -1.628906 8.5625 -2.921875 L 7.109375 -2.921875 C 6.929688 -2.035156 6.539062 -1.367188 5.9375 -0.921875 C 5.34375 -0.472656 4.597656 -0.25 3.703125 -0.25 C 2.597656 -0.25 1.703125 -0.628906 1.015625 -1.390625 C 0.335938 -2.148438 0 -3.226562 0 -4.625 C 0 -5.488281 0.132812 -6.253906 0.40625 -6.921875 C 0.6875 -7.597656 1.085938 -8.125 1.609375 -8.5 C 2.140625 -8.875 2.757812 -9.0625 3.46875 -9.0625 C 4.351562 -9.0625 5.09375 -8.804688 5.6875 -8.296875 C 6.28125 -7.796875 6.644531 -7.085938 6.78125 -6.171875 L 8.234375 -6.171875 C 8.078125 -7.441406 7.601562 -8.429688 6.8125 -9.140625 Z M 7.40625 -8.890625 "/></g></g></defs><g fill="rgb(100%, 100%, 100%)" fill-opacity="1"><g transform="translate(10.488749, 324.610237)"><g><use x="0" y="0" xlink:href="#glyph-0-0"/><use x="8.503906" y="0" xlink:href="#glyph-0-1"/></g></g></g><g fill="rgb(100%, 100%, 100%)" fill-opacity="1"><g transform="translate(10.488749, 386.110237)"><g/></g></g></svg>
+                </span>
+                WordPress Backup Manager
+            </h1>
             <div class="topbar-actions">
                 <button id="themeToggle" class="theme-toggle" type="button">Dark mode</button>
                 <a href="?logout=1" class="logout-btn">Logout</a>
