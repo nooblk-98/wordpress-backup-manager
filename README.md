@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./images/logo.svg" width="360" alt="WordPress Backup Manager logo" />
+  <img src="./images/logod.svg" width="360" alt="WordPress Backup Manager logo" />
 
 # WordPress Backup Manager
 
