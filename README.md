@@ -17,11 +17,7 @@
 `backup.php` is a single PHP file you can drop into a WordPress install to back up the database, `wp-content`, or a full site. It includes a clean UI, resumable/chunked zip creation, progress logs, and download links when complete.
 
 
-<div align="center">
-  <video src="https://github.com/nooblk-98/wordpress-backup-manager/raw/main/src/demo.mp4" controls autoplay loop muted width="100%" max-width="800px">
-    Your browser does not support the video tag.
-  </video>
-</div>
+![WordPress Backup Manager](./src/vid.gif)
 
 
 ## Features
