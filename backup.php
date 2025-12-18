@@ -3044,6 +3044,30 @@ $existingBackups = getExistingBackups();
         body.theme-dark .btn-delete { box-shadow: 0 10px 20px rgba(185,28,28,0.28); }
         body.theme-dark .footer { color: #cbd5e1; }
         body.theme-dark .footer a { color: #93c5fd; }
+
+        /* Light mode (default) */
+        body { background: #f4f6fb; color: #0f172a; }
+        body .topbar { background: #f4f6fb; color: #0f172a; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2); }
+        body .card { background: #fff; border-color: rgba(15, 23, 42, 0.05); box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08); }
+        body .section-title { color: #0f172a; }
+        body .info-chip { background: #f1f5f9; border-color: rgba(59, 130, 246, 0.15); }
+        body .info-label { color: #2563eb; }
+        body .info-value { color: #0f172a; }
+        body .input-card { background: #f8fafc; border-color: rgba(15, 23, 42, 0.06); }
+        body .option-title { color: #0f172a; }
+        body .option-help { color: #475569; }
+        body .text-input { background: #fff; color: #0f172a; border-color: rgba(15, 23, 42, 0.18); }
+        body .text-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
+        body .progress-bar-wrapper { background: #e2e8f0; }
+        body .progress-text { color: #475569; }
+        body .logs-box { background: #0f172a; color: #e2e8f0; }
+        body .backup-item { background: #f8fafc; border-color: rgba(15, 23, 42, 0.08); }
+        body .backup-name { color: #0f172a; }
+        body .backup-meta { color: #475569; }
+        body .btn-download { box-shadow: 0 10px 20px rgba(22,163,74,0.18); }
+        body .btn-delete { box-shadow: 0 10px 20px rgba(185,28,28,0.18); }
+        body .footer { color: #475569; }
+        body .footer a { color: #2563eb; }
     </style>
 </head>
 <body>
