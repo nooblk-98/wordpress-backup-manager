@@ -303,34 +303,25 @@ if (BACKUP_IP_WHITELIST_ENABLED) {
     }
 }
 
-if (isset($_POST['backup_password'])) {
-    $inputPassword = (string)$_POST['backup_password'];
-    $md5 = (string)BACKUP_PASSWORD_MD5;
-
-    $authenticated = false;
-    if ($md5 !== '') {
-        $authenticated = hash_equals(strtolower($md5), md5($inputPassword));
-    } else {
-        $_SESSION['backup_error'] = 'Backup password is not configured (BACKUP_PASSWORD_MD5 is empty)';
-        $authenticated = false;
-    }
-
-    if ($authenticated) {
-        $_SESSION['backup_authenticated'] = true;
-    } else {
-        $_SESSION['backup_error'] = 'Invalid password';
-    }
-}
-
-// Logout
 if (isset($_GET['logout'])) {
     session_destroy();
     header('Location: ' . $_SERVER['PHP_SELF']);
     exit;
 }
 
-// Check authentication
-if (!isset($_SESSION['backup_authenticated']) || $_SESSION['backup_authenticated'] !== true) {
+if (isset($_POST['backup_password'])) {
+    $inputPassword = (string)$_POST['backup_password'];
+    $md5 = (string)BACKUP_PASSWORD_MD5;
+    if ($md5 !== '' && hash_equals(strtolower($md5), md5($inputPassword))) {
+        $_SESSION['backup_authenticated'] = true;
+        header('Location: ' . $_SERVER['PHP_SELF']);
+        exit;
+    }
+    $_SESSION['backup_error'] = 'Invalid password';
+}
+
+if (empty($_SESSION['backup_authenticated'])) {
+    http_response_code(200);
     ?>
     <!DOCTYPE html>
     <html>
@@ -339,77 +330,26 @@ if (!isset($_SESSION['backup_authenticated']) || $_SESSION['backup_authenticated
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>WordPress Backup Manager - Login</title>
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 20px;
-            }
-            .login-container {
-                background: white;
-                padding: 40px;
-                border-radius: 10px;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-                max-width: 400px;
-                width: 100%;
-            }
-            h1 {
-                color: #333;
-                margin-bottom: 30px;
-                text-align: center;
-                font-size: 24px;
-            }
-            input[type="password"] {
-                width: 100%;
-                padding: 12px;
-                border: 2px solid #ddd;
-                border-radius: 5px;
-                font-size: 16px;
-                margin-bottom: 20px;
-                transition: border-color 0.3s;
-            }
-            input[type="password"]:focus {
-                outline: none;
-                border-color: #667eea;
-            }
-            button {
-                width: 100%;
-                padding: 12px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                border: none;
-                border-radius: 5px;
-                font-size: 16px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: transform 0.2s;
-            }
-            button:hover {
-                transform: translateY(-2px);
-            }
-            .error {
-                background: #fee;
-                color: #c33;
-                padding: 10px;
-                border-radius: 5px;
-                margin-bottom: 20px;
-                text-align: center;
-            }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+            .login-card { background: #111827; padding: 26px 24px; border-radius: 14px; width: 340px; box-shadow: 0 18px 36px rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); }
+            h1 { margin: 0 0 12px; font-size: 20px; letter-spacing: -0.2px; }
+            .field { margin: 12px 0 18px; }
+            input { width: 100%; padding: 12px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); background: #0b1220; color: #fff; font-size: 14px; }
+            input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.2); }
+            button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: linear-gradient(135deg,#2563eb,#4f46e5); color: #fff; font-weight: 700; cursor: pointer; }
+            .error { background: #fee2e2; color: #b91c1c; padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #fecdd3; }
         </style>
     </head>
     <body>
-        <div class="login-container">
-            <h1>🔒 WordPress Backup Manager</h1>
-            <script>document.querySelector('.login-container h1').textContent = 'WordPress Backup Manager';</script>
+        <div class="login-card">
+            <h1>WordPress Backup Manager</h1>
             <?php if (isset($_SESSION['backup_error'])): ?>
                 <div class="error"><?php echo htmlspecialchars($_SESSION['backup_error']); unset($_SESSION['backup_error']); ?></div>
             <?php endif; ?>
             <form method="POST">
-                <input type="password" name="backup_password" placeholder="Enter Password" required autofocus>
+                <div class="field">
+                    <input type="password" name="backup_password" placeholder="Enter Password" required autofocus>
+                </div>
                 <button type="submit">Login</button>
             </form>
         </div>
@@ -418,7 +358,6 @@ if (!isset($_SESSION['backup_authenticated']) || $_SESSION['backup_authenticated
     <?php
     exit;
 }
-
 // CSRF token for actions
 if (empty($_SESSION['backup_csrf'])) {
     try {
@@ -2724,475 +2663,394 @@ $existingBackups = getExistingBackups();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WordPress Backup Manager</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Manrope', 'Segoe UI', sans-serif;
+            background: #f4f6fb;
+            color: #0f172a;
             min-height: 100vh;
-            padding: 20px;
+            padding: 28px 20px 40px;
         }
-        
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
         }
-        
-        header {
-            background: white;
-            padding: 20px 30px;
-            border-radius: 10px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
+
+        .topbar {
+            background: #0f172a;
+            color: #fff;
+            padding: 18px 22px;
+            border-radius: 14px;
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
         }
-        
-        header h1 {
-            color: #333;
-            font-size: 28px;
-        }
-        
-        .logout-btn {
-            background: #dc3545;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            text-decoration: none;
-            font-weight: 600;
-            transition: background 0.3s;
-        }
-        
-        .logout-btn:hover {
-            background: #c82333;
-        }
-        
-        .backup-section {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
-        }
-        
-        .backup-section h2 {
-            color: #333;
-            margin-bottom: 20px;
+
+        .topbar h1 {
             font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.2px;
         }
-        
+
+        .logout-btn {
+            background: #dc2626;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 700;
+            border: none;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            box-shadow: 0 10px 20px rgba(220, 38, 38, 0.28);
+        }
+
+        .logout-btn:hover { transform: translateY(-1px); }
+        .logout-btn:active { transform: translateY(0); }
+
+        .card {
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+            padding: 24px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(15, 23, 42, 0.05);
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 18px;
+            letter-spacing: -0.1px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .info-chip {
+            background: #f1f5f9;
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            border-radius: 12px;
+            padding: 12px;
+        }
+
+        .info-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: #2563eb;
+            letter-spacing: 0.2px;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+
+        .info-value {
+            color: #0f172a;
+            font-size: 14px;
+            word-break: break-word;
+        }
+
+        .input-card {
+            background: #f8fafc;
+            border: 1px solid rgba(15, 23, 42, 0.06);
+            border-radius: 12px;
+            padding: 14px;
+            margin-top: 6px;
+        }
+
+        .option-title {
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 8px;
+        }
+
+        .text-input {
+            width: 100%;
+            border: 1px solid rgba(15, 23, 42, 0.18);
+            border-radius: 10px;
+            padding: 11px 12px;
+            font-size: 14px;
+            outline: none;
+            background: #fff;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .text-input:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .option-help {
+            margin-top: 8px;
+            color: #475569;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
         .backup-buttons {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin: 16px 0 6px;
         }
-        
+
         .backup-btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px 25px;
+            background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+            color: #fff;
+            padding: 14px 18px;
             border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 700;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            display: flex;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 10px;
+            box-shadow: 0 14px 30px rgba(79, 70, 229, 0.22);
         }
-        
-        .backup-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        
-        .backup-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .progress-container {
-            display: none;
-            margin-top: 20px;
-        }
-        
+
+        .backup-btn:hover { transform: translateY(-1px); }
+        .backup-btn:active { transform: translateY(0); }
+        .backup-btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+
+        .progress-container { display: none; margin-top: 20px; }
+
         .progress-bar-wrapper {
-            background: #f0f0f0;
-            border-radius: 10px;
-            height: 30px;
+            background: #e2e8f0;
+            border-radius: 12px;
+            height: 18px;
             overflow: hidden;
-            position: relative;
         }
-        
+
         .progress-bar {
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
             height: 100%;
             width: 0%;
             transition: width 0.3s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-weight: 600;
-            font-size: 14px;
+            color: #0f172a;
+            font-weight: 700;
+            font-size: 12px;
         }
-        
+
         .progress-text {
             margin-top: 10px;
-            color: #666;
+            color: #475569;
             text-align: center;
+            font-size: 13px;
         }
-        
+
         .status-message {
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
+            padding: 14px;
+            border-radius: 12px;
+            margin-top: 16px;
             display: none;
+            font-weight: 600;
         }
-        
+
         .status-message.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: #ecfdf3;
+            color: #14532d;
+            border: 1px solid #bbf7d0;
         }
-        
+
         .status-message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecdd3;
         }
-        
-        .backups-list {
-            margin-top: 20px;
-        }
-        
+
+        .backups-list { margin-top: 10px; display: grid; gap: 10px; }
+
         .backup-item {
-            background: #f8f9fa;
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 10px;
+            background: #f8fafc;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 12px;
+            padding: 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            transition: background 0.3s;
+            gap: 12px;
         }
-        
-        .backup-item:hover {
-            background: #e9ecef;
-        }
-        
-        .backup-info {
-            flex: 1;
-        }
-        
-        .backup-name {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 5px;
-        }
-        
-        .backup-meta {
-            font-size: 14px;
-            color: #666;
-        }
-        
-        .backup-actions {
-            display: flex;
-            gap: 10px;
-        }
-        
+
+        .backup-info { flex: 1; min-width: 0; }
+        .backup-name { font-weight: 700; margin-bottom: 4px; color: #0f172a; }
+        .backup-meta { font-size: 13px; color: #475569; }
+
+        .backup-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
         .btn-download, .btn-delete {
-            padding: 8px 16px;
-            border-radius: 5px;
+            padding: 9px 12px;
+            border-radius: 10px;
             text-decoration: none;
-            font-weight: 600;
-            font-size: 14px;
-            transition: all 0.3s;
-        }
-
-        .btn-secondary {
-            padding: 10px 14px;
-            border-radius: 8px;
-            border: 1px solid rgba(0,0,0,0.12);
-            background: rgba(255,255,255,0.9);
-            color: #18324a;
             font-weight: 700;
-            cursor: pointer;
+            font-size: 13px;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
         }
 
-        .btn-secondary:hover {
-            background: #fff;
-        }
-        
         .btn-download {
-            background: #28a745;
-            color: white;
+            background: #16a34a;
+            color: #fff;
+            box-shadow: 0 10px 20px rgba(22, 163, 74, 0.18);
         }
-        
-        .btn-download:hover {
-            background: #218838;
-        }
-        
+
         .btn-delete {
-            background: #dc3545;
-            color: white;
+            background: #b91c1c;
+            color: #fff;
+            box-shadow: 0 10px 20px rgba(185, 28, 28, 0.18);
         }
-        
-        .btn-delete:hover {
-            background: #c82333;
-        }
-        
+
+        .btn-download:hover, .btn-delete:hover { transform: translateY(-1px); }
+
         .type-badge {
             display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
-            margin-left: 10px;
-        }
-        
-        .type-badge.sql {
-            background: #17a2b8;
-            color: white;
-        }
-        
-        .type-badge.zip {
-            background: #ffc107;
-            color: #333;
-        }
-        
-        .info-box {
-            background: #e7f3ff;
-            border-left: 4px solid #2196F3;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }
-        
-        .info-box strong {
-            color: #1976D2;
-        }
-
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-            align-items: start;
-        }
-
-        @media (max-width: 900px) {
-            .info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-
-        @media (max-width: 520px) {
-            .info-grid { grid-template-columns: 1fr; }
-        }
-
-        .info-item {
-            background: rgba(255,255,255,0.65);
-            border: 1px solid rgba(25,118,210,0.12);
-            border-radius: 10px;
-            padding: 12px;
-            min-width: 0;
-        }
-
-        .info-label {
-            font-size: 12px;
-            font-weight: 700;
-            color: #1976D2;
-            letter-spacing: 0.2px;
-            margin-bottom: 6px;
-        }
-
-        .info-value {
-            color: #18324a;
-            font-size: 14px;
-            word-break: break-word;
-        }
-
-        .options-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-top: 12px;
-        }
-
-        @media (max-width: 900px) {
-            .options-grid { grid-template-columns: 1fr; }
-        }
-
-        .option-card {
-            background: rgba(255,255,255,0.65);
-            border: 1px solid rgba(25,118,210,0.12);
-            border-radius: 10px;
-            padding: 12px;
-        }
-
-        .option-title {
-            font-weight: 700;
-            color: #18324a;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .option-help {
-            margin-top: 6px;
-            color: #506a85;
-            font-size: 12px;
-            line-height: 1.4;
-        }
-
-        .text-input {
-            width: 100%;
-            border: 1px solid rgba(0,0,0,0.15);
+            padding: 3px 8px;
             border-radius: 8px;
-            padding: 10px 12px;
-            font-size: 14px;
-            outline: none;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            margin-left: 8px;
+            background: #e2e8f0;
+            color: #0f172a;
         }
 
-        .text-input:focus {
-            border-color: rgba(25,118,210,0.55);
-            box-shadow: 0 0 0 3px rgba(25,118,210,0.15);
-        }
-        
-        .logs-container {
-            margin-top: 20px;
-        }
-        
+        .type-badge.sql { background: #dbeafe; color: #1d4ed8; }
+        .type-badge.zip { background: #fef9c3; color: #92400e; }
+
+        .logs-container { margin-top: 20px; }
+
         .logs-box {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 15px;
-            max-height: 300px;
+            background: #0f172a;
+            border-radius: 12px;
+            padding: 14px;
+            max-height: 280px;
             overflow-y: auto;
             font-family: 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.6;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #e2e8f0;
         }
-        
-        .log-entry {
-            padding: 3px 0;
-            color: #333;
-        }
-        
-        .log-entry.error {
-            color: #dc3545;
-            font-weight: 600;
-        }
-        
-        .log-entry.success {
-            color: #28a745;
-            font-weight: 600;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
+
+        .log-entry { padding: 3px 0; }
+        .log-entry.error { color: #fca5a5; font-weight: 700; }
+        .log-entry.success { color: #bbf7d0; font-weight: 700; }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
         .spinner {
             display: inline-block;
             width: 16px;
             height: 16px;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-top: 3px solid white;
+            border: 3px solid rgba(255,255,255,0.35);
+            border-top: 3px solid #fff;
             border-radius: 50%;
             animation: spin 1s linear infinite;
+        }
+
+        .footer {
+            margin-top: 16px;
+            text-align: center;
+            color: #475569;
+            font-size: 13px;
+        }
+
+        .footer a {
+            color: #2563eb;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🗄️ WordPress Backup Manager</h1>
-            <script>document.querySelector('header h1').textContent = 'WordPress Backup Manager';</script>
+        <header class="topbar">
+            <h1>WordPress Backup Manager</h1>
             <a href="?logout=1" class="logout-btn">Logout</a>
         </header>
-        
-        <div class="backup-section">
-            <h2>Create New Backup</h2>
-            
-            <div class="info-box">
-                <div class="info-grid">
-                    <div class="info-item">
-                        <div class="info-label">Database</div>
-                        <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_NAME']); ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Host</div>
-                        <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_HOST']); ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">User</div>
-                        <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_USER']); ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Backup Directory</div>
-                        <div class="info-value"><?php echo htmlspecialchars(getBackupDir()); ?></div>
-                    </div>
-                </div>
 
-                <?php if (!empty($wpConfig['_source'])): ?>
-                    <div style="margin-top: 10px; color: #506a85; font-size: 12px;">
-                        <strong>Config file:</strong> <?php echo htmlspecialchars($wpConfig['_source']); ?>
-                    </div>
-                <?php endif; ?>
-                <div class="options-grid">
-                    <div class="option-card">
-                        <div class="option-title">Ignore folder names</div>
-                        <input class="text-input" id="ignoreDirs" type="text" placeholder="<?php echo htmlspecialchars(implode(', ', parseIgnoreDirNames(BACKUP_IGNORE_DIRNAMES))); ?>">
-                        <div class="option-help">
-                            Comma-separated folder names to skip anywhere in <code>wp-content</code>. Example: <code>node_modules, cache, tmp</code>.
-                        </div>
-                    </div>
+        <div class="card">
+            <div class="section-title">Create New Backup</div>
+
+            <div class="info-grid">
+                <div class="info-chip">
+                    <div class="info-label">Database</div>
+                    <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_NAME']); ?></div>
+                </div>
+                <div class="info-chip">
+                    <div class="info-label">Host</div>
+                    <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_HOST']); ?></div>
+                </div>
+                <div class="info-chip">
+                    <div class="info-label">User</div>
+                    <div class="info-value"><?php echo htmlspecialchars($wpConfig['DB_USER']); ?></div>
+                </div>
+                <div class="info-chip">
+                    <div class="info-label">Backup Directory</div>
+                    <div class="info-value"><?php echo htmlspecialchars(getBackupDir()); ?></div>
                 </div>
             </div>
-            
-            <div class="backup-buttons">
-                <button class="backup-btn" onclick="startBackup('database')">
-                    <span>💾</span> Backup Database Only
-                </button>
-                <button class="backup-btn" onclick="startBackup('files')">
-                    <span>📁</span> Backup Files Only (wp-content)
-                </button>
-                <button class="backup-btn" onclick="startBackup('full')">
-                    <span>📦</span> Full Backup (Database + Files)
-                </button>
+
+            <?php if (!empty($wpConfig['_source'])): ?>
+                <div class="option-help" style="margin: -6px 0 8px 2px; font-size: 12px;">
+                    <strong>Config file:</strong> <?php echo htmlspecialchars($wpConfig['_source']); ?>
+                </div>
+            <?php endif; ?>
+
+            <div class="input-card">
+                <div class="option-title">Ignore folder names</div>
+                <input class="text-input" id="ignoreDirs" type="text" placeholder="<?php echo htmlspecialchars(implode(', ', parseIgnoreDirNames(BACKUP_IGNORE_DIRNAMES))); ?>">
+                <div class="option-help">
+                    Comma-separated folder names to skip anywhere in wp-content. Example: node_modules, cache, tmp.
+                </div>
             </div>
-            
+
+            <div class="backup-buttons">
+                <button class="backup-btn" onclick="startBackup('database')">Backup Database Only</button>
+                <button class="backup-btn" onclick="startBackup('files')">Backup Files Only (wp-content)</button>
+                <button class="backup-btn" onclick="startBackup('full')">Full Backup (Database + Files)</button>
+            </div>
+
             <div class="progress-container" id="progressContainer">
                 <div class="progress-bar-wrapper">
                     <div class="progress-bar" id="progressBar">0%</div>
                 </div>
                 <div class="progress-text" id="progressText">Preparing backup...</div>
             </div>
-            
+
             <div class="status-message" id="statusMessage"></div>
-            
+
             <div class="logs-container" id="logsContainer" style="display: none;">
-                <h3 style="margin: 20px 0 10px; color: #333; font-size: 16px;">📋 Backup Log</h3>
+                <div class="section-title" style="font-size: 15px; margin-bottom: 8px;">Backup Log</div>
                 <div class="logs-box" id="logsBox"></div>
             </div>
         </div>
-        
-        <div class="backup-section">
-            <h2>Existing Backups (<?php echo count($existingBackups); ?>)</h2>
-            
+
+        <div class="card">
+            <div class="section-title">Existing Backups (<?php echo count($existingBackups); ?>)</div>
+
             <?php if (empty($existingBackups)): ?>
-                <p style="color: #666; text-align: center; padding: 20px;">No backups found. Create your first backup above!</p>
+                <p style="color: #475569; text-align: center; padding: 12px 0;">No backups found. Create your first backup above!</p>
             <?php else: ?>
                 <div class="backups-list">
                     <?php foreach ($existingBackups as $backup): ?>
@@ -3200,32 +3058,26 @@ $existingBackups = getExistingBackups();
                             <div class="backup-info">
                                 <div class="backup-name">
                                     <?php echo htmlspecialchars($backup['name']); ?>
-                                    <span class="type-badge <?php echo $backup['type']; ?>">
-                                        <?php echo strtoupper($backup['type']); ?>
-                                    </span>
+                                    <span class="type-badge <?php echo htmlspecialchars($backup['type']); ?>"><?php echo htmlspecialchars($backup['type']); ?></span>
                                 </div>
                                 <div class="backup-meta">
-                                    <?php echo $backup['size']; ?> • Created: <?php echo $backup['date']; ?>
+                                    <?php echo htmlspecialchars($backup['date']); ?> &bull; <?php echo htmlspecialchars($backup['size']); ?>
                                 </div>
                             </div>
                             <div class="backup-actions">
-                                <a href="?action=download&file=<?php echo urlencode($backup['name']); ?>&csrf=<?php echo urlencode($csrfToken); ?>" class="btn-download">
-                                    ⬇️ Download
-                                </a>
-                                <a href="#" 
-                                   class="btn-delete" 
-                                   data-file="<?php echo htmlspecialchars($backup['name'], ENT_QUOTES); ?>"
-                                   onclick="return deleteBackupFile(this.dataset.file);">
-                                    🗑️ Delete
-                                </a>
+                                <a class="btn-download" href="?action=download&file=<?php echo urlencode($backup['name']); ?>&csrf=<?php echo urlencode($_SESSION['backup_csrf']); ?>">Download</a>
+                                <button class="btn-delete" onclick="deleteBackupFile('<?php echo htmlspecialchars($backup['name']); ?>')">Delete</button>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
             <?php endif; ?>
         </div>
+
+        <div class="footer">
+            Developed and maintained by <a href="https://github.com/nooblk-98" target="_blank" rel="noopener noreferrer">Nooblk</a> with love &lt;3
+        </div>
     </div>
-    
     <script>
         let currentBackupFile = '';
         const csrfToken = <?php echo json_encode($csrfToken); ?>;
@@ -3319,26 +3171,22 @@ $existingBackups = getExistingBackups();
             const logsContainer = document.getElementById('logsContainer');
             const logsBox = document.getElementById('logsBox');
             const buttons = document.querySelectorAll('.backup-btn');
-            
-            // Reset and show progress
+
             progressContainer.style.display = 'block';
             statusMessage.style.display = 'none';
             logsContainer.style.display = 'block';
             logsBox.innerHTML = '';
             progressBar.style.width = '0%';
-            progressBar.innerHTML = '0%';
-            progressBar.style.background = 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)';
-            
-            // Disable all buttons
+            progressBar.textContent = '0%';
+            progressBar.style.background = 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)';
+
             buttons.forEach(btn => btn.disabled = true);
-            
-            // Determine action and text
+
             let action = '';
             let actionText = '';
-            const excludeUploads = !!document.getElementById('excludeUploads')?.checked;
             const ignoreDirs = (document.getElementById('ignoreDirs')?.value || '').trim();
-            
-            switch(type) {
+
+            switch (type) {
                 case 'database':
                     action = 'backup_database';
                     actionText = 'Backing up database...';
@@ -3352,23 +3200,17 @@ $existingBackups = getExistingBackups();
                     actionText = 'Creating full backup...';
                     break;
             }
-            
+
             progressText.textContent = actionText;
-            
-            // Simulate progress
+
             let progress = 0;
             const progressInterval = setInterval(() => {
-                progress += Math.random() * 15;
-                if (progress > 90) progress = 90;
+                progress = Math.min(90, progress + Math.random() * 15);
                 progressBar.style.width = progress + '%';
                 progressBar.innerHTML = '<span class="spinner"></span>';
             }, 300);
-            
-            // Perform backup
+
             let url = '?action=' + action + '&csrf=' + encodeURIComponent(csrfToken) + '&async=1';
-            if (excludeUploads && (type === 'files' || type === 'full')) {
-                url += '&exclude_uploads=1';
-            }
             if (ignoreDirs && (type === 'files' || type === 'full')) {
                 url += '&ignore_dirs=' + encodeURIComponent(ignoreDirs);
             }
@@ -3412,77 +3254,74 @@ $existingBackups = getExistingBackups();
                 .then(data => {
                     if (!data) return;
                     clearInterval(progressInterval);
-                    
-                    // Display logs
+
                     if (data.logs && data.logs.length > 0) {
                         data.logs.forEach(log => {
                             const logEntry = document.createElement('div');
                             logEntry.className = 'log-entry';
-                            if (log.startsWith('ERROR:')) {
+                            if (String(log).startsWith('ERROR:')) {
                                 logEntry.className += ' error';
-                            } else if (log.includes('complete') || log.includes('Success')) {
+                            } else if (String(log).toLowerCase().includes('complete') || String(log).toLowerCase().includes('success')) {
                                 logEntry.className += ' success';
                             }
-                            logEntry.textContent = '→ ' + log;
+                            logEntry.textContent = String(log);
                             logsBox.appendChild(logEntry);
                         });
                         logsBox.scrollTop = logsBox.scrollHeight;
                     }
-                    
+
                     if (data.success) {
                         progressBar.style.width = '100%';
-                        progressBar.innerHTML = '100%';
+                        progressBar.textContent = '100%';
                         progressText.textContent = 'Backup completed successfully!';
-                        
+
                         currentBackupFile = data.filename;
-                        
+
                         let stats = '';
                         if (data.tables) stats += `${data.tables} tables, `;
                         if (data.rows) stats += `${data.rows} rows, `;
                         if (data.files) stats += `${data.files} files, `;
                         if (data.compression) stats += `${data.compression}% compressed`;
-                        
+
                         statusMessage.className = 'status-message success';
                         statusMessage.innerHTML = `
-                            <strong>✅ Success!</strong> Backup created: ${data.filename} (${data.size})<br>
+                            <strong>Success!</strong> Backup created: ${data.filename} (${data.size})<br>
                             ${stats ? '<small>' + stats + '</small><br>' : ''}
                             <a href="?action=download&file=${encodeURIComponent(data.filename)}&csrf=${encodeURIComponent(csrfToken)}" 
-                               style="color: #155724; text-decoration: underline; font-weight: 600; margin-top: 10px; display: inline-block;">
-                                📥 Download Now
+                               style="color: #14532d; text-decoration: underline; font-weight: 700; margin-top: 10px; display: inline-block;">
+                                Download Now
                             </a>
                         `;
                         statusMessage.style.display = 'block';
-                        
-                        // Reload page after 4 seconds to show new backup
+
                         setTimeout(() => {
                             window.location.reload();
                         }, 4000);
                     } else {
                         progressBar.style.width = '100%';
-                        progressBar.innerHTML = 'Error';
+                        progressBar.textContent = 'Error';
                         progressBar.style.background = '#dc3545';
                         progressText.textContent = 'Backup failed!';
-                        
+
                         statusMessage.className = 'status-message error';
-                        statusMessage.innerHTML = `<strong>❌ Error:</strong> ${data.error}`;
+                        statusMessage.innerHTML = `<strong>Error:</strong> ${data.error}`;
                         statusMessage.style.display = 'block';
                     }
-                    
-                    // Re-enable buttons
+
                     buttons.forEach(btn => btn.disabled = false);
                 })
                 .catch(error => {
                     clearInterval(progressInterval);
-                    
+
                     progressBar.style.width = '100%';
-                    progressBar.innerHTML = 'Error';
+                    progressBar.textContent = 'Error';
                     progressBar.style.background = '#dc3545';
                     progressText.textContent = 'Backup failed!';
-                    
+
                     statusMessage.className = 'status-message error';
-                    statusMessage.innerHTML = `<strong>❌ Error:</strong> ${error.message}`;
+                    statusMessage.innerHTML = `<strong>Error:</strong> ${error.message}`;
                     statusMessage.style.display = 'block';
-                    
+
                     if (error.data && Array.isArray(error.data.logs)) {
                         error.data.logs.forEach(l => {
                             const logEntry = document.createElement('div');
@@ -3494,9 +3333,9 @@ $existingBackups = getExistingBackups();
 
                     const logEntry = document.createElement('div');
                     logEntry.className = 'log-entry error';
-                    logEntry.textContent = '→ ERROR: ' + error.message;
+                    logEntry.textContent = 'ERROR: ' + error.message;
                     logsBox.appendChild(logEntry);
-                    
+
                     buttons.forEach(btn => btn.disabled = false);
                 });
         }
