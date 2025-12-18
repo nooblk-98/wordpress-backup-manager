@@ -29,6 +29,12 @@
 
 ## Quick start
 
+```bash
+wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/main/backup.php
+
+```
+## else
+
 1) **Copy the file**  
    Place `backup.php` at the root of your WordPress install (next to `wp-config.php`).
 
