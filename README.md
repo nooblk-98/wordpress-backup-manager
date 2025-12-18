@@ -8,6 +8,8 @@
 [![PHP Version](https://img.shields.io/badge/PHP-7.4%20|%208.1%20|%208.2%20|%208.3%20|%208.4-777BB4?logo=php&logoColor=white)](https://www.php.net/)
 [![License: AGPL](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](http://www.gnu.org/licenses/agpl-3.0)
 [![Last Commit](https://img.shields.io/github/last-commit/nooblk-98/wordpress-backup-manager)](https://github.com/nooblk-98/wordpress-backup-manager/commits/main)
+
+<img src="./src/vid.gif" alt="WordPress Backup Manager Demo" />
 </div>
 
 ---
