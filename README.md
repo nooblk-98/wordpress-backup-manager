@@ -18,7 +18,7 @@
 
 
 <div align="center">
-  <video src="/src/2025-12-18 18-12-38.mp4" controls autoplay loop muted width="100%" max-width="800px">
+  <video src="https://github.com/nooblk-98/wordpress-backup-manager/raw/main/src/demo.mp4" controls autoplay loop muted width="100%" max-width="800px">
     Your browser does not support the video tag.
   </video>
 </div>
