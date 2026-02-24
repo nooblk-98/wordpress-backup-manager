@@ -76,6 +76,16 @@ Key settings at the top of `backup.php`:
 | `DB_DUMP_INSERT_BATCH` / `DB_DUMP_LOG_EVERY_ROWS` | Database export batching and logging frequency. |
 | `FILES_LOG_EVERY` / `ZIP_COMPRESS_LEVEL` | File-backup logging cadence and compression level. |
 
+
+## Manually replace backup paths 
+```php
+// Store backups inside site root to satisfy open_basedir restriction
+define('BACKUP_DIR', '/www/wwwroot/www.iit.ac.lk/backups');
+define('BACKUP_DIR_FALLBACK', '/www/wwwroot/www.iit.ac.lk/wp-content/backups');
+define('BACKUP_DIR_TMP', '/www/wwwroot/www.iit.ac.lk/backups/tmp');
+define('BACKUP_DIR_SITE_TMP', '/www/wwwroot/www.iit.ac.lk/backup-manager-backups');
+```
+
 ## How it works
 
 - **Database backup**: Exports all tables with DROP/CREATE + INSERT statements, writing a `.sql` file into the backup folder.  
