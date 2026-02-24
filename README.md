@@ -80,10 +80,10 @@ Key settings at the top of `backup.php`:
 ## Manually replace backup paths 
 ```php
 // Store backups inside site root to satisfy open_basedir restriction
-define('BACKUP_DIR', '/www/wwwroot/www.iit.ac.lk/backups');
-define('BACKUP_DIR_FALLBACK', '/www/wwwroot/www.iit.ac.lk/wp-content/backups');
-define('BACKUP_DIR_TMP', '/www/wwwroot/www.iit.ac.lk/backups/tmp');
-define('BACKUP_DIR_SITE_TMP', '/www/wwwroot/www.iit.ac.lk/backup-manager-backups');
+define('BACKUP_DIR', '/www/wwwroot/www.example.com/backups');
+define('BACKUP_DIR_FALLBACK', '/www/wwwroot/www.example.com/wp-content/backups');
+define('BACKUP_DIR_TMP', '/www/wwwroot/www.example.com/backups/tmp');
+define('BACKUP_DIR_SITE_TMP', '/www/wwwroot/www.example.com/backup-manager-backups');
 ```
 
 ## How it works
