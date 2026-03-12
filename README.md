@@ -37,11 +37,6 @@
 wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/main/backup.php
 
 ```
-
-url_replace.sh
-```bash
-wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/dev/src/url_replace.sh
-```
 ## else
 
 1) **Copy the file**  
