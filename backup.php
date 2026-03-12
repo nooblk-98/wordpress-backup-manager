@@ -3246,6 +3246,26 @@ function formatBytes($bytes, $precision = 2) {
     return round($bytes, $precision) . ' ' . $units[$pow];
 }
 
+function iniSizeToBytes(string $value): int {
+    $value = trim($value);
+    if ($value === '') {
+        return 0;
+    }
+
+    $last = strtolower(substr($value, -1));
+    $num = (float)$value;
+    switch ($last) {
+        case 'g':
+            $num *= 1024;
+        case 'm':
+            $num *= 1024;
+        case 'k':
+            $num *= 1024;
+    }
+
+    return (int)round($num);
+}
+
 function getExistingBackups() {
     $dirs = getBackupSearchDirs();
     $files = [];
@@ -3284,6 +3304,14 @@ function getExistingBackups() {
 }
 
 $existingBackups = getExistingBackups();
+$uploadMaxBytes = iniSizeToBytes((string)ini_get('upload_max_filesize'));
+$postMaxBytes = iniSizeToBytes((string)ini_get('post_max_size'));
+$effectiveUploadLimitBytes = 0;
+if ($uploadMaxBytes > 0 && $postMaxBytes > 0) {
+    $effectiveUploadLimitBytes = min($uploadMaxBytes, $postMaxBytes);
+} else {
+    $effectiveUploadLimitBytes = max($uploadMaxBytes, $postMaxBytes);
+}
 ?>
 <!DOCTYPE html>
 <html>
@@ -3789,6 +3817,11 @@ $existingBackups = getExistingBackups();
                 <div class="option-help">
                     Upload backups from other sites, then click Restore. During restore, sample.com URLs are replaced with this site's URL.
                 </div>
+                <div class="option-help">
+                    Server upload limit: <?php echo htmlspecialchars($effectiveUploadLimitBytes > 0 ? formatBytes($effectiveUploadLimitBytes) : 'Unknown'); ?>
+                    (upload_max_filesize=<?php echo htmlspecialchars((string)ini_get('upload_max_filesize')); ?>,
+                    post_max_size=<?php echo htmlspecialchars((string)ini_get('post_max_size')); ?>)
+                </div>
             </div>
 
             <?php if (empty($existingBackups)): ?>
@@ -3852,6 +3885,20 @@ $existingBackups = getExistingBackups();
         let currentBackupFile = '';
         const csrfToken = <?php echo json_encode($csrfToken); ?>;
         const defaultIgnoreDirs = <?php echo json_encode(implode(', ', parseIgnoreDirNames(BACKUP_IGNORE_DIRNAMES))); ?>;
+        const uploadMaxBytes = <?php echo (int)$uploadMaxBytes; ?>;
+        const postMaxBytes = <?php echo (int)$postMaxBytes; ?>;
+        const effectiveUploadLimitBytes = <?php echo (int)$effectiveUploadLimitBytes; ?>;
+
+        function formatFileSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let value = Number(bytes || 0);
+            let i = 0;
+            while (value >= 1024 && i < units.length - 1) {
+                value /= 1024;
+                i++;
+            }
+            return `${value.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+        }
 
         function showConfigDebug() {
             const logsContainer = document.getElementById('logsContainer');
@@ -3912,6 +3959,11 @@ $existingBackups = getExistingBackups();
             const file = fileInput && fileInput.files ? fileInput.files[0] : null;
             if (!file) {
                 alert('Please select a .sql or .zip backup file first.');
+                return false;
+            }
+
+            if (effectiveUploadLimitBytes > 0 && file.size > effectiveUploadLimitBytes) {
+                alert(`File is too large (${formatFileSize(file.size)}). Server limit is ${formatFileSize(effectiveUploadLimitBytes)}.`);
                 return false;
             }
 
