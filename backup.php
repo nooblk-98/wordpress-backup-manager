@@ -2640,7 +2640,32 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
     $statement = '';
     $inBlockComment = false;
     $statements = 0;
+    $skippedEmpty = 0;
     $bytes = 0;
+
+    $executeStatement = function(string $sql) use ($mysqli, &$logs, &$statements, &$skippedEmpty): void {
+        $sql = trim($sql);
+        if ($sql === '' || $sql === ';') {
+            return;
+        }
+
+        if (!$mysqli->query($sql)) {
+            // MySQL error 1065: query becomes empty after parser strips comments/conditional SQL.
+            if ((int)$mysqli->errno === 1065) {
+                $skippedEmpty++;
+                return;
+            }
+
+            $err = $mysqli->error;
+            $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+            throw new Exception('SQL error: ' . $err);
+        }
+
+        $statements++;
+        if ($statements % 250 === 0) {
+            $logs[] = "Executed $statements statements...";
+        }
+    };
 
     while (($line = fgets($handle)) !== false) {
         $bytes += strlen($line);
@@ -2678,6 +2703,10 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
             continue;
         }
 
+        if (preg_match('/^DELIMITER\s+\S+/i', $trim)) {
+            continue;
+        }
+
         // Strip UTF-8 BOM if present at the very beginning.
         if ($statement === '' && $line !== '') {
             $line = preg_replace('/^\\xEF\\xBB\\xBF/', '', $line);
@@ -2687,31 +2716,13 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
         if (preg_match('/;\\s*$/', $trim)) {
             $sql = trim($statement);
             $statement = '';
-            if ($sql === '' || $sql === ';') {
-                continue;
-            }
-            if (!$mysqli->query($sql)) {
-                $err = $mysqli->error;
-                $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
-                throw new Exception('SQL error: ' . $err);
-            }
-            $statements++;
-            if ($statements % 250 === 0) {
-                $logs[] = "Executed $statements statements...";
-            }
+            $executeStatement($sql);
         }
     }
 
     if (trim($statement) !== '') {
         $sql = trim($statement);
-        if ($sql !== '' && $sql !== ';') {
-            if (!$mysqli->query($sql)) {
-                $err = $mysqli->error;
-                $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
-                throw new Exception('SQL error: ' . $err);
-            }
-            $statements++;
-        }
+        $executeStatement($sql);
     }
 
     fclose($handle);
@@ -2719,9 +2730,13 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
     $mysqli->close();
 
     $logs[] = "Database restore completed: $statements statements";
+    if ($skippedEmpty > 0) {
+        $logs[] = "Skipped $skippedEmpty empty/comment-only statements";
+    }
     return [
         'statements' => $statements,
         'bytes' => $bytes,
+        'skipped_empty' => $skippedEmpty,
     ];
 }
 
