@@ -2678,31 +2678,40 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
             continue;
         }
 
+        // Strip UTF-8 BOM if present at the very beginning.
+        if ($statement === '' && $line !== '') {
+            $line = preg_replace('/^\\xEF\\xBB\\xBF/', '', $line);
+        }
+
         $statement .= $line;
         if (preg_match('/;\\s*$/', $trim)) {
             $sql = trim($statement);
             $statement = '';
-            if ($sql !== '') {
-                if (!$mysqli->query($sql)) {
-                    $err = $mysqli->error;
-                    $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
-                    throw new Exception('SQL error: ' . $err);
-                }
-                $statements++;
-                if ($statements % 250 === 0) {
-                    $logs[] = "Executed $statements statements...";
-                }
+            if ($sql === '' || $sql === ';') {
+                continue;
+            }
+            if (!$mysqli->query($sql)) {
+                $err = $mysqli->error;
+                $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+                throw new Exception('SQL error: ' . $err);
+            }
+            $statements++;
+            if ($statements % 250 === 0) {
+                $logs[] = "Executed $statements statements...";
             }
         }
     }
 
     if (trim($statement) !== '') {
-        if (!$mysqli->query($statement)) {
-            $err = $mysqli->error;
-            $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
-            throw new Exception('SQL error: ' . $err);
+        $sql = trim($statement);
+        if ($sql !== '' && $sql !== ';') {
+            if (!$mysqli->query($sql)) {
+                $err = $mysqli->error;
+                $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+                throw new Exception('SQL error: ' . $err);
+            }
+            $statements++;
         }
-        $statements++;
     }
 
     fclose($handle);
