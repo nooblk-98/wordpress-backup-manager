@@ -3932,6 +3932,10 @@ $existingBackups = getExistingBackups();
             progressBar.style.background = 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)';
             progressText.textContent = 'Uploading backup...';
 
+            let visualPercent = 0;
+            let gotRealProgress = false;
+            let uploadFinished = false;
+
             const body = new FormData();
             body.append('action', 'upload_backup');
             body.append('csrf', csrfToken);
@@ -3947,21 +3951,50 @@ $existingBackups = getExistingBackups();
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '?action=upload_backup', true);
 
+            const progressFallbackTimer = setInterval(() => {
+                if (uploadFinished) {
+                    if (visualPercent < 99) {
+                        visualPercent = Math.min(99, visualPercent + 1);
+                        progressBar.style.width = visualPercent + '%';
+                        progressBar.textContent = visualPercent + '%';
+                    }
+                    progressText.textContent = 'Upload sent. Processing on server...';
+                    return;
+                }
+
+                if (!gotRealProgress) {
+                    visualPercent = Math.min(95, visualPercent + 2);
+                    progressBar.style.width = visualPercent + '%';
+                    progressBar.textContent = visualPercent + '%';
+                }
+            }, 500);
+
             xhr.upload.onprogress = (event) => {
                 if (!event.lengthComputable) {
-                    progressBar.style.width = '100%';
-                    progressBar.innerHTML = '<span class="spinner"></span>';
+                    progressBar.style.width = Math.max(visualPercent, 15) + '%';
+                    progressBar.textContent = Math.max(visualPercent, 15) + '%';
                     progressText.textContent = 'Uploading backup...';
                     return;
                 }
 
+                gotRealProgress = true;
                 const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+                visualPercent = Math.max(visualPercent, percent);
                 progressBar.style.width = percent + '%';
                 progressBar.textContent = percent + '%';
                 progressText.textContent = `Uploading backup... ${percent}%`;
             };
 
+            xhr.upload.onload = () => {
+                uploadFinished = true;
+                visualPercent = Math.max(visualPercent, 99);
+                progressBar.style.width = visualPercent + '%';
+                progressBar.textContent = visualPercent + '%';
+                progressText.textContent = 'Upload sent. Processing on server...';
+            };
+
             xhr.onerror = () => {
+                clearInterval(progressFallbackTimer);
                 progressBar.textContent = 'Error';
                 progressBar.style.background = '#dc3545';
                 progressText.textContent = 'Upload failed';
@@ -3972,6 +4005,7 @@ $existingBackups = getExistingBackups();
             };
 
             xhr.onload = () => {
+                clearInterval(progressFallbackTimer);
                 let data = null;
                 try {
                     data = JSON.parse(xhr.responseText || '{}');
