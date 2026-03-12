@@ -1205,7 +1205,7 @@ if (isset($_GET['action']) || isset($_POST['action'])) {
     }
 
     // For AJAX actions, enforce JSON error handling + CSRF.
-    if (in_array($action, ['backup_database', 'backup_files', 'backup_full', 'delete', 'restore', 'job_status', 'job_step', 'config_debug'], true)) {
+    if (in_array($action, ['backup_database', 'backup_files', 'backup_full', 'delete', 'restore', 'upload_backup', 'job_status', 'job_step', 'config_debug'], true)) {
         initAjaxHandlers();
         requireCsrf();
     }
@@ -1562,6 +1562,9 @@ if (isset($_GET['action']) || isset($_POST['action'])) {
             break;
         case 'delete':
             deleteBackup();
+            break;
+        case 'upload_backup':
+            uploadBackup();
             break;
         case 'restore':
             restoreBackup($wpConfig);
@@ -2615,6 +2618,310 @@ function deleteBackup() {
     respondJson(['success' => true, 'logs' => ['Deleted: ' . $filename]]);
 }
 
+function uploadBackup(): void {
+    if (!isset($_FILES['backup_file']) || !is_array($_FILES['backup_file'])) {
+        respondJson(['success' => false, 'error' => 'No file uploaded', 'logs' => ['ERROR: No file uploaded']], 400);
+    }
+
+    $file = $_FILES['backup_file'];
+    $error = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ($error !== UPLOAD_ERR_OK) {
+        $msg = 'Upload failed';
+        if ($error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE) {
+            $msg = 'Uploaded file is too large';
+        } elseif ($error === UPLOAD_ERR_NO_FILE) {
+            $msg = 'No file uploaded';
+        } elseif ($error === UPLOAD_ERR_PARTIAL) {
+            $msg = 'Uploaded file was only partially uploaded';
+        }
+        respondJson(['success' => false, 'error' => $msg, 'logs' => ['ERROR: ' . $msg]], 400);
+    }
+
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    if ($tmpPath === '' || !is_uploaded_file($tmpPath)) {
+        respondJson(['success' => false, 'error' => 'Invalid upload source', 'logs' => ['ERROR: Invalid upload source']], 400);
+    }
+
+    $originalName = basename((string)($file['name'] ?? 'backup.sql'));
+    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['sql', 'zip'], true)) {
+        respondJson(['success' => false, 'error' => 'Unsupported file type. Only .sql and .zip are allowed.', 'logs' => ['ERROR: Unsupported file type']], 400);
+    }
+
+    $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+    $baseName = preg_replace('/[^a-zA-Z0-9._-]+/', '-', $baseName);
+    $baseName = trim((string)$baseName, '-._ ');
+    if ($baseName === '') {
+        $baseName = 'uploaded-backup-' . date('Y-m-d-His');
+    }
+
+    $targetName = $baseName . '.' . $ext;
+    $backupDir = ensureBackupDir();
+    ensureBackupDirReady($backupDir);
+    $targetPath = $backupDir . DIRECTORY_SEPARATOR . $targetName;
+    if (file_exists($targetPath)) {
+        $targetName = $baseName . '-' . date('Ymd-His') . '-' . substr(md5(uniqid('', true)), 0, 6) . '.' . $ext;
+        $targetPath = $backupDir . DIRECTORY_SEPARATOR . $targetName;
+    }
+
+    if (!@move_uploaded_file($tmpPath, $targetPath)) {
+        respondJson(['success' => false, 'error' => 'Failed to move uploaded file', 'logs' => ['ERROR: Failed to move uploaded file']], 500);
+    }
+
+    $size = @filesize($targetPath);
+    respondJson([
+        'success' => true,
+        'filename' => $targetName,
+        'size' => $size !== false ? formatBytes((int)$size) : 'Unknown',
+        'logs' => ['Uploaded backup: ' . $targetName],
+    ]);
+}
+
+function getCurrentSiteUrlForRestore(): string {
+    $host = trim((string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? ''));
+    if ($host === '') {
+        return '';
+    }
+
+    $https = (string)($_SERVER['HTTPS'] ?? '');
+    $forwardedProto = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+    $scheme = 'http';
+    if ($https !== '' && strtolower($https) !== 'off' && $https !== '0') {
+        $scheme = 'https';
+    } elseif ($forwardedProto === 'https') {
+        $scheme = 'https';
+    } elseif ((string)($_SERVER['SERVER_PORT'] ?? '') === '443') {
+        $scheme = 'https';
+    }
+
+    $scriptName = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
+    $path = dirname($scriptName);
+    if ($path === '.' || $path === '/' || $path === '\\') {
+        $path = '';
+    }
+    $path = rtrim((string)$path, '/');
+
+    return rtrim($scheme . '://' . $host . $path, '/');
+}
+
+function buildRestoreUrlReplaceMap(string $currentSiteUrl): array {
+    $current = rtrim($currentSiteUrl, '/');
+    if ($current === '') {
+        return [];
+    }
+
+    return [
+        'http://sample.com' => $current,
+        'https://sample.com' => $current,
+    ];
+}
+
+function replaceUrlsRecursive($value, array $replaceMap, int &$changes) {
+    if (is_string($value)) {
+        $replaced = strtr($value, $replaceMap);
+        if ($replaced !== $value) {
+            $changes++;
+        }
+        return $replaced;
+    }
+
+    if (is_array($value)) {
+        foreach ($value as $key => $item) {
+            $value[$key] = replaceUrlsRecursive($item, $replaceMap, $changes);
+        }
+        return $value;
+    }
+
+    if (is_object($value)) {
+        foreach (get_object_vars($value) as $key => $item) {
+            $value->$key = replaceUrlsRecursive($item, $replaceMap, $changes);
+        }
+        return $value;
+    }
+
+    return $value;
+}
+
+function replaceUrlsInScalarValue(string $value, array $replaceMap, int &$changedValues): string {
+    if ($value === '' || strpos($value, 'sample.com') === false) {
+        return $value;
+    }
+
+    $serialized = @unserialize($value, ['allowed_classes' => false]);
+    if ($serialized !== false || $value === 'b:0;') {
+        $innerChanges = 0;
+        $updated = replaceUrlsRecursive($serialized, $replaceMap, $innerChanges);
+        if ($innerChanges > 0) {
+            $changedValues++;
+            return serialize($updated);
+        }
+        return $value;
+    }
+
+    $json = json_decode($value, true);
+    if (json_last_error() === JSON_ERROR_NONE && (is_array($json) || is_string($json) || is_object($json))) {
+        $innerChanges = 0;
+        $updated = replaceUrlsRecursive($json, $replaceMap, $innerChanges);
+        if ($innerChanges > 0) {
+            $encoded = json_encode($updated, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($encoded !== false) {
+                $changedValues++;
+                return $encoded;
+            }
+        }
+    }
+
+    $replaced = strtr($value, $replaceMap);
+    if ($replaced !== $value) {
+        $changedValues++;
+    }
+    return $replaced;
+}
+
+function primaryKeyColumns(mysqli $mysqli, string $table): array {
+    $pkCols = [];
+    $res = $mysqli->query("SHOW KEYS FROM `$table` WHERE Key_name = 'PRIMARY'");
+    if ($res) {
+        while ($row = $res->fetch_assoc()) {
+            $name = (string)($row['Column_name'] ?? '');
+            if ($name !== '') {
+                $pkCols[] = $name;
+            }
+        }
+        $res->free();
+    }
+    return $pkCols;
+}
+
+function textColumns(mysqli $mysqli, string $table): array {
+    $cols = [];
+    $res = $mysqli->query("SHOW COLUMNS FROM `$table`");
+    if ($res) {
+        while ($row = $res->fetch_assoc()) {
+            $name = (string)($row['Field'] ?? '');
+            $type = strtolower((string)($row['Type'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            if (preg_match('/^(varchar|char|text|tinytext|mediumtext|longtext|enum|set)\b/', $type)) {
+                $cols[] = $name;
+            }
+        }
+        $res->free();
+    }
+    return $cols;
+}
+
+function applyRestoreUrlReplacements(mysqli $mysqli, array $replaceMap, array &$logs): array {
+    if (empty($replaceMap)) {
+        return ['tables' => 0, 'rows' => 0, 'values' => 0];
+    }
+
+    $tableRes = $mysqli->query('SHOW TABLES');
+    if (!$tableRes) {
+        $logs[] = 'URL remap skipped: failed to list tables (' . $mysqli->error . ')';
+        return ['tables' => 0, 'rows' => 0, 'values' => 0];
+    }
+
+    $tablesTouched = 0;
+    $rowsUpdated = 0;
+    $valuesUpdated = 0;
+
+    while ($row = $tableRes->fetch_row()) {
+        $table = (string)($row[0] ?? '');
+        if ($table === '') {
+            continue;
+        }
+
+        $pkCols = primaryKeyColumns($mysqli, $table);
+        if (empty($pkCols)) {
+            continue;
+        }
+
+        $txtCols = textColumns($mysqli, $table);
+        if (empty($txtCols)) {
+            continue;
+        }
+
+        $whereLike = [];
+        foreach ($txtCols as $col) {
+            foreach (array_keys($replaceMap) as $fromUrl) {
+                $whereLike[] = "`$col` LIKE '%" . $mysqli->real_escape_string($fromUrl) . "%'";
+            }
+        }
+        if (empty($whereLike)) {
+            continue;
+        }
+
+        $selectCols = array_merge($pkCols, $txtCols);
+        $escapedCols = array_map(function($c) {
+            return "`$c`";
+        }, $selectCols);
+        $selectSql = "SELECT " . implode(',', $escapedCols) . " FROM `$table` WHERE " . implode(' OR ', $whereLike);
+        $rowsRes = $mysqli->query($selectSql);
+        if (!$rowsRes) {
+            continue;
+        }
+
+        $tableRowUpdates = 0;
+        while ($data = $rowsRes->fetch_assoc()) {
+            $setParts = [];
+            $changedInRow = 0;
+            foreach ($txtCols as $col) {
+                if (!array_key_exists($col, $data) || $data[$col] === null) {
+                    continue;
+                }
+                $oldValue = (string)$data[$col];
+                $newValue = replaceUrlsInScalarValue($oldValue, $replaceMap, $changedInRow);
+                if ($newValue !== $oldValue) {
+                    $setParts[] = "`$col`='" . $mysqli->real_escape_string($newValue) . "'";
+                }
+            }
+
+            if (empty($setParts)) {
+                continue;
+            }
+
+            $wherePk = [];
+            foreach ($pkCols as $pk) {
+                if (!array_key_exists($pk, $data)) {
+                    continue 2;
+                }
+                $pkVal = $data[$pk];
+                if ($pkVal === null) {
+                    $wherePk[] = "`$pk` IS NULL";
+                } else {
+                    $wherePk[] = "`$pk`='" . $mysqli->real_escape_string((string)$pkVal) . "'";
+                }
+            }
+
+            if (empty($wherePk)) {
+                continue;
+            }
+
+            $updateSql = "UPDATE `$table` SET " . implode(', ', $setParts) . " WHERE " . implode(' AND ', $wherePk) . " LIMIT 1";
+            if ($mysqli->query($updateSql)) {
+                $tableRowUpdates++;
+                $rowsUpdated++;
+                $valuesUpdated += $changedInRow;
+            }
+        }
+        $rowsRes->free();
+
+        if ($tableRowUpdates > 0) {
+            $tablesTouched++;
+            $logs[] = "URL remap: updated $tableRowUpdates rows in table `$table`";
+        }
+    }
+    $tableRes->free();
+
+    return [
+        'tables' => $tablesTouched,
+        'rows' => $rowsUpdated,
+        'values' => $valuesUpdated,
+    ];
+}
+
 function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs): array {
     set_time_limit(0);
     releaseSessionLock();
@@ -2726,6 +3033,22 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
     }
 
     fclose($handle);
+
+    $currentSiteUrl = getCurrentSiteUrlForRestore();
+    $replaceMap = buildRestoreUrlReplaceMap($currentSiteUrl);
+    $urlReplaceStats = ['tables' => 0, 'rows' => 0, 'values' => 0];
+    if (!empty($replaceMap)) {
+        $logs[] = 'Applying URL remap to current site URL: ' . $currentSiteUrl;
+        $urlReplaceStats = applyRestoreUrlReplacements($mysqli, $replaceMap, $logs);
+        if (($urlReplaceStats['rows'] ?? 0) > 0) {
+            $logs[] = 'URL remap completed: ' . (int)$urlReplaceStats['rows'] . ' rows updated';
+        } else {
+            $logs[] = 'URL remap completed: no matching sample.com URLs found';
+        }
+    } else {
+        $logs[] = 'URL remap skipped: current site URL could not be determined';
+    }
+
     $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
     $mysqli->close();
 
@@ -2737,6 +3060,7 @@ function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs
         'statements' => $statements,
         'bytes' => $bytes,
         'skipped_empty' => $skippedEmpty,
+        'url_replacements' => $urlReplaceStats,
     ];
 }
 
@@ -3456,6 +3780,17 @@ $existingBackups = getExistingBackups();
         <div class="card">
             <div class="section-title">Existing Backups (<?php echo count($existingBackups); ?>)</div>
 
+            <div class="input-card" style="margin-bottom: 12px;">
+                <div class="option-title">Upload Backup (.sql or .zip)</div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <input class="text-input" id="backupUploadFile" type="file" accept=".sql,.zip" style="max-width: 420px;">
+                    <button class="backup-btn" style="padding: 10px 14px; font-size: 14px;" onclick="uploadBackup()">Upload Backup</button>
+                </div>
+                <div class="option-help">
+                    Upload backups from other sites, then click Restore. During restore, sample.com URLs are replaced with this site's URL.
+                </div>
+            </div>
+
             <?php if (empty($existingBackups)): ?>
                 <p style="color: #475569; text-align: center; padding: 12px 0;">No backups found. Create your first backup above!</p>
             <?php else: ?>
@@ -3571,6 +3906,92 @@ $existingBackups = getExistingBackups();
                 localStorage.setItem('backupManagerIgnoreDirs', ignoreInput.value || '');
             });
         })();
+
+        function uploadBackup() {
+            const fileInput = document.getElementById('backupUploadFile');
+            const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+            if (!file) {
+                alert('Please select a .sql or .zip backup file first.');
+                return false;
+            }
+
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const statusMessage = document.getElementById('statusMessage');
+            const logsContainer = document.getElementById('logsContainer');
+            const logsBox = document.getElementById('logsBox');
+
+            progressContainer.style.display = 'block';
+            logsContainer.style.display = 'block';
+            statusMessage.style.display = 'none';
+            logsBox.innerHTML = '';
+
+            progressBar.style.width = '100%';
+            progressBar.innerHTML = '<span class="spinner"></span>';
+            progressBar.style.background = 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)';
+            progressText.textContent = 'Uploading backup...';
+
+            const body = new FormData();
+            body.append('action', 'upload_backup');
+            body.append('csrf', csrfToken);
+            body.append('backup_file', file);
+
+            fetch('?action=upload_backup', {
+                method: 'POST',
+                body
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data && Array.isArray(data.logs)) {
+                    data.logs.forEach(log => {
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry';
+                        if (String(log).startsWith('ERROR:')) {
+                            logEntry.className += ' error';
+                        } else {
+                            logEntry.className += ' success';
+                        }
+                        logEntry.textContent = String(log);
+                        logsBox.appendChild(logEntry);
+                    });
+                }
+
+                if (data && data.success) {
+                    progressBar.textContent = 'Done';
+                    progressText.textContent = 'Upload completed';
+                    statusMessage.className = 'status-message success';
+                    statusMessage.innerHTML = `<strong>Success!</strong> Uploaded: ${data.filename}${data.size ? ' (' + data.size + ')' : ''}`;
+                    statusMessage.style.display = 'block';
+                    if (fileInput) {
+                        fileInput.value = '';
+                    }
+                    setTimeout(() => window.location.reload(), 1200);
+                } else {
+                    progressBar.textContent = 'Error';
+                    progressBar.style.background = '#dc3545';
+                    progressText.textContent = 'Upload failed';
+                    statusMessage.className = 'status-message error';
+                    statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : 'Upload failed'}`;
+                    statusMessage.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                progressBar.textContent = 'Error';
+                progressBar.style.background = '#dc3545';
+                progressText.textContent = 'Upload failed';
+                statusMessage.className = 'status-message error';
+                statusMessage.innerHTML = `<strong>Error:</strong> ${err.message}`;
+                statusMessage.style.display = 'block';
+
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry error';
+                logEntry.textContent = 'ERROR: ' + err.message;
+                logsBox.appendChild(logEntry);
+            });
+
+            return false;
+        }
 
         function deleteBackupFile(filename) {
             if (!confirm('Are you sure you want to delete this backup?')) return false;
