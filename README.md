@@ -121,6 +121,65 @@ define('BACKUP_DIR_SITE_TMP', '/www/wwwroot/www.example.com/backup-manager-backu
 - **Cloudflare users blocked**: Ensure REMOTE_ADDR is a Cloudflare edge and `CF-Connecting-IP` is present; update CF ranges if needed.  
 - **Download not found**: File may have been cleaned up or written to the fallback directory; check `BACKUP_DIR` and `BACKUP_DIR_FALLBACK`.
 
+## Replace domain URLs in downloaded backups
+
+If you downloaded a backup and want to migrate from one domain to another (for example `example.com` -> `https://example2.com`), use the helper scripts in `src/`.
+
+### One script for both `.sql` and `.zip`
+
+```bash
+chmod +x src/replace_backup_urls.sh
+src/replace_backup_urls.sh <backup.sql|backup.zip> example.com https://example2.com
+```
+
+Interactive mode (prompts for URLs):
+
+```bash
+src/replace_backup_urls.sh full-backup-2026-03-12-050545.zip
+```
+
+Optional output file:
+
+```bash
+src/replace_backup_urls.sh full-backup.zip example.com https://example2.com full-backup-updated.zip
+```
+
+These scripts replace both:
+- `http://old-domain`
+- `https://old-domain`
+
+with your new URL.
+
+### 1) SQL dump only
+
+```bash
+chmod +x src/replace_sql_urls.sh
+src/replace_sql_urls.sh database-2026-03-12.sql example.com https://example2.com
+```
+
+Optional output file:
+
+```bash
+src/replace_sql_urls.sh database.sql example.com https://example2.com database-updated.sql
+```
+
+### 2) Full backup zip (with embedded SQL)
+
+```bash
+chmod +x src/replace_backup_zip_urls.sh
+src/replace_backup_zip_urls.sh full-backup-2026-03-12.zip example.com https://example2.com
+```
+
+Optional output zip:
+
+```bash
+src/replace_backup_zip_urls.sh full-backup.zip example.com https://example2.com full-backup-updated.zip
+```
+
+Notes:
+- `replace_sql_urls.sh` performs serialized/JSON-safe replacement to avoid corrupting WordPress serialized values.
+- For zip mode, the script rewrites the SQL file inside the archive and repacks it.
+
 ## Contributing
 
 PRs and issues are welcome. Please keep changes self-contained and maintain the single-file simplicity. For feature requests, open a GitHub issue with clear reproduction steps or desired behavior.
