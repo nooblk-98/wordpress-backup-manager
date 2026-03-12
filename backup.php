@@ -3949,7 +3949,7 @@ $existingBackups = getExistingBackups();
             };
 
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', '?action=upload_backup', true);
+            xhr.open('POST', '?action=upload_backup&csrf=' + encodeURIComponent(csrfToken), true);
 
             const progressFallbackTimer = setInterval(() => {
                 if (uploadFinished) {
@@ -4037,10 +4037,16 @@ $existingBackups = getExistingBackups();
                 progressBar.style.background = '#dc3545';
                 progressText.textContent = 'Upload failed';
                 statusMessage.className = 'status-message error';
-                statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : 'Upload failed'}`;
+                const fallbackError = `Upload failed (HTTP ${xhr.status || 0})`;
+                statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : fallbackError}`;
                 statusMessage.style.display = 'block';
                 if (!data || !Array.isArray(data.logs)) {
-                    addLogLine('ERROR: Upload failed', true);
+                    const raw = (xhr.responseText || '').trim();
+                    const shortRaw = raw.length > 220 ? (raw.slice(0, 220) + '...') : raw;
+                    addLogLine('ERROR: ' + fallbackError, true);
+                    if (shortRaw !== '') {
+                        addLogLine('ERROR: Server response: ' + shortRaw.replace(/\s+/g, ' '), true);
+                    }
                 }
             };
 
