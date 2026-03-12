@@ -37,9 +37,9 @@
 wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/main/backup.php
 
 ```
-```bash
-dev
 
+dev
+```bash
 wget  https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/dev/backup.php
 ```
 ## else
