@@ -19,7 +19,7 @@ define('BACKUP_PASSWORD_MD5', '94f63e2f03239f2a6061ee2af18856a4');
 // Notes:
 // - By default we ONLY trust REMOTE_ADDR. To trust proxy headers, enable BACKUP_TRUST_PROXY_HEADERS.
 define('BACKUP_IP_WHITELIST_ENABLED', true);
-define('BACKUP_IP_WHITELIST', ['127.0.0.1', '192.168.8.0/16', '123.231.94.186']);
+define('BACKUP_IP_WHITELIST', ['127.0.0.1', '192.168.8.0/16', '123.231.97.70', '123.231.94.186']);
 define('BACKUP_TRUST_PROXY_HEADERS', false);
 // Safe Cloudflare IP ranges (used only when REMOTE_ADDR matches one of these).
 define('BACKUP_CLOUDFLARE_IP_RANGES', [
@@ -1205,7 +1205,7 @@ if (isset($_GET['action']) || isset($_POST['action'])) {
     }
 
     // For AJAX actions, enforce JSON error handling + CSRF.
-    if (in_array($action, ['backup_database', 'backup_files', 'backup_full', 'delete', 'job_status', 'job_step', 'config_debug'], true)) {
+    if (in_array($action, ['backup_database', 'backup_files', 'backup_full', 'delete', 'restore', 'job_status', 'job_step', 'config_debug'], true)) {
         initAjaxHandlers();
         requireCsrf();
     }
@@ -1562,6 +1562,9 @@ if (isset($_GET['action']) || isset($_POST['action'])) {
             break;
         case 'delete':
             deleteBackup();
+            break;
+        case 'restore':
+            restoreBackup($wpConfig);
             break;
     }
 }
@@ -2612,6 +2615,280 @@ function deleteBackup() {
     respondJson(['success' => true, 'logs' => ['Deleted: ' . $filename]]);
 }
 
+function restoreDatabaseFromSqlFile(array $config, string $sqlPath, array &$logs): array {
+    set_time_limit(0);
+    releaseSessionLock();
+
+    if (!file_exists($sqlPath)) {
+        throw new Exception('SQL file not found: ' . $sqlPath);
+    }
+
+    $logs[] = 'Restoring database from: ' . basename($sqlPath);
+    $logs[] = "Connecting to database: {$config['DB_NAME']}@{$config['DB_HOST']}";
+    $mysqli = new mysqli($config['DB_HOST'], $config['DB_USER'], $config['DB_PASSWORD'], $config['DB_NAME']);
+    if ($mysqli->connect_error) {
+        throw new Exception('Connection failed: ' . $mysqli->connect_error);
+    }
+    @$mysqli->set_charset('utf8mb4');
+
+    $mysqli->query('SET FOREIGN_KEY_CHECKS=0');
+    $handle = fopen($sqlPath, 'rb');
+    if (!$handle) {
+        throw new Exception('Failed to open SQL file for reading');
+    }
+
+    $statement = '';
+    $inBlockComment = false;
+    $statements = 0;
+    $bytes = 0;
+
+    while (($line = fgets($handle)) !== false) {
+        $bytes += strlen($line);
+        $trim = trim($line);
+        if ($trim === '') {
+            continue;
+        }
+
+        if ($inBlockComment) {
+            $endPos = strpos($trim, '*/');
+            if ($endPos === false) {
+                continue;
+            }
+            $inBlockComment = false;
+            $line = substr($line, strpos($line, '*/') + 2);
+            $trim = trim($line);
+            if ($trim === '') {
+                continue;
+            }
+        }
+
+        if (strpos($trim, '/*') === 0) {
+            if (strpos($trim, '*/') === false) {
+                $inBlockComment = true;
+                continue;
+            }
+            $line = substr($line, strpos($line, '*/') + 2);
+            $trim = trim($line);
+            if ($trim === '') {
+                continue;
+            }
+        }
+
+        if (preg_match('/^(--|#)/', $trim)) {
+            continue;
+        }
+
+        $statement .= $line;
+        if (preg_match('/;\\s*$/', $trim)) {
+            $sql = trim($statement);
+            $statement = '';
+            if ($sql !== '') {
+                if (!$mysqli->query($sql)) {
+                    $err = $mysqli->error;
+                    $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+                    throw new Exception('SQL error: ' . $err);
+                }
+                $statements++;
+                if ($statements % 250 === 0) {
+                    $logs[] = "Executed $statements statements...";
+                }
+            }
+        }
+    }
+
+    if (trim($statement) !== '') {
+        if (!$mysqli->query($statement)) {
+            $err = $mysqli->error;
+            $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+            throw new Exception('SQL error: ' . $err);
+        }
+        $statements++;
+    }
+
+    fclose($handle);
+    $mysqli->query('SET FOREIGN_KEY_CHECKS=1');
+    $mysqli->close();
+
+    $logs[] = "Database restore completed: $statements statements";
+    return [
+        'statements' => $statements,
+        'bytes' => $bytes,
+    ];
+}
+
+function findSqlEntryInZip(ZipArchive $zip): ?string {
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $name = $zip->getNameIndex($i);
+        if ($name === false) {
+            continue;
+        }
+        $normalized = str_replace('\\', '/', $name);
+        if (substr($normalized, -4) !== '.sql') {
+            continue;
+        }
+        if (strpos($normalized, 'wp-content/') === 0) {
+            continue;
+        }
+        return $name;
+    }
+    return null;
+}
+
+function restoreWpContentFromZip(ZipArchive $zip, array &$logs): array {
+    $targetDir = __DIR__ . DIRECTORY_SEPARATOR . 'wp-content';
+    $files = 0;
+    $bytes = 0;
+
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $name = $zip->getNameIndex($i);
+        if ($name === false) {
+            continue;
+        }
+        $normalized = str_replace('\\', '/', $name);
+        if (strpos($normalized, 'wp-content/') !== 0) {
+            continue;
+        }
+        if (substr($normalized, -1) === '/') {
+            $relDir = substr($normalized, strlen('wp-content/'));
+            if ($relDir === '' || preg_match('#(^|/)\\.\\.(/|$)#', $relDir)) {
+                continue;
+            }
+            safeMkdir($targetDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relDir));
+            continue;
+        }
+
+        $rel = substr($normalized, strlen('wp-content/'));
+        if ($rel === '' || preg_match('#(^|/)\\.\\.(/|$)#', $rel)) {
+            continue;
+        }
+
+        $destPath = $targetDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+        safeMkdir(dirname($destPath));
+
+        $in = $zip->getStream($name);
+        if (!$in) {
+            throw new Exception('Failed to read zip entry: ' . $name);
+        }
+        $out = fopen($destPath, 'wb');
+        if (!$out) {
+            fclose($in);
+            throw new Exception('Failed to write file: ' . $destPath);
+        }
+        $copied = stream_copy_to_stream($in, $out);
+        fclose($in);
+        fclose($out);
+
+        if (is_int($copied)) {
+            $bytes += $copied;
+        }
+        $files++;
+        if ($files % 500 === 0) {
+            $logs[] = "Restored $files files...";
+        }
+    }
+
+    $logs[] = "Files restore completed: $files files";
+    return [
+        'files' => $files,
+        'bytes' => $bytes,
+    ];
+}
+
+function restoreBackupFromZip(array $config, string $zipPath, array &$logs): array {
+    if (!class_exists('ZipArchive')) {
+        throw new Exception('PHP extension "zip" (ZipArchive) is not available.');
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== TRUE) {
+        throw new Exception('Cannot open zip file');
+    }
+
+    $sqlEntry = findSqlEntryInZip($zip);
+    $dbStats = null;
+    if ($sqlEntry !== null) {
+        $tmpDir = ensureBackupDir();
+        ensureBackupDirReady($tmpDir);
+        $tmpSql = $tmpDir . DIRECTORY_SEPARATOR . ('restore-' . uniqid('', true) . '.sql');
+        $in = $zip->getStream($sqlEntry);
+        if (!$in) {
+            $zip->close();
+            throw new Exception('Failed to read SQL entry from zip: ' . $sqlEntry);
+        }
+        $out = fopen($tmpSql, 'wb');
+        if (!$out) {
+            fclose($in);
+            $zip->close();
+            throw new Exception('Failed to write temp SQL file');
+        }
+        stream_copy_to_stream($in, $out);
+        fclose($in);
+        fclose($out);
+
+        $logs[] = 'SQL file found in backup: ' . $sqlEntry;
+        $dbStats = restoreDatabaseFromSqlFile($config, $tmpSql, $logs);
+        @unlink($tmpSql);
+    } else {
+        $logs[] = 'No SQL file found in zip (skipping database restore)';
+    }
+
+    $fileStats = restoreWpContentFromZip($zip, $logs);
+    $zip->close();
+
+    return [
+        'db' => $dbStats,
+        'files' => $fileStats,
+    ];
+}
+
+function restoreBackup(array $config): void {
+    $filename = basename((string)($_POST['file'] ?? ''));
+    if ($filename === '') {
+        respondJson(['success' => false, 'error' => 'Missing file name', 'logs' => ['ERROR: Missing file name']], 400);
+    }
+
+    $filepath = resolveBackupFilepath($filename);
+    if (!$filepath || !file_exists($filepath)) {
+        respondJson(['success' => false, 'error' => 'File not found', 'logs' => ['ERROR: File not found']], 404);
+    }
+
+    $ext = strtolower(pathinfo($filepath, PATHINFO_EXTENSION));
+    $logs = [];
+
+    try {
+        if ($ext === 'sql') {
+            $stats = restoreDatabaseFromSqlFile($config, $filepath, $logs);
+            respondJson([
+                'success' => true,
+                'type' => 'database',
+                'filename' => $filename,
+                'logs' => $logs,
+                'statements' => $stats['statements'] ?? 0,
+            ]);
+        }
+        if ($ext === 'zip') {
+            $result = restoreBackupFromZip($config, $filepath, $logs);
+            respondJson([
+                'success' => true,
+                'type' => 'zip',
+                'filename' => $filename,
+                'logs' => $logs,
+                'files' => $result['files']['files'] ?? 0,
+                'statements' => $result['db']['statements'] ?? 0,
+            ]);
+        }
+
+        respondJson(['success' => false, 'error' => 'Unsupported backup type', 'logs' => ['ERROR: Unsupported backup type']], 400);
+    } catch (Exception $e) {
+        $logs[] = 'ERROR: ' . $e->getMessage();
+        respondJson([
+            'success' => false,
+            'error' => $e->getMessage(),
+            'logs' => $logs,
+        ], 500);
+    }
+}
+
 function formatBytes($bytes, $precision = 2) {
     $units = array('B', 'KB', 'MB', 'GB', 'TB');
     $bytes = max($bytes, 0);
@@ -2909,7 +3186,7 @@ $existingBackups = getExistingBackups();
 
         .backup-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-        .btn-download, .btn-delete {
+        .btn-download, .btn-delete, .btn-restore {
             padding: 9px 12px;
             border-radius: 10px;
             text-decoration: none;
@@ -2934,7 +3211,13 @@ $existingBackups = getExistingBackups();
             box-shadow: 0 10px 20px rgba(185, 28, 28, 0.18);
         }
 
-        .btn-download:hover, .btn-delete:hover { transform: translateY(-1px); }
+        .btn-restore {
+            background: #f59e0b;
+            color: #111827;
+            box-shadow: 0 10px 20px rgba(245, 158, 11, 0.18);
+        }
+
+        .btn-download:hover, .btn-delete:hover, .btn-restore:hover { transform: translateY(-1px); }
 
         .type-badge {
             display: inline-block;
@@ -3042,6 +3325,7 @@ $existingBackups = getExistingBackups();
         body.theme-dark .backup-meta { color: #cbd5e1; }
         body.theme-dark .btn-download { box-shadow: 0 10px 20px rgba(22,163,74,0.28); }
         body.theme-dark .btn-delete { box-shadow: 0 10px 20px rgba(185,28,28,0.28); }
+        body.theme-dark .btn-restore { box-shadow: 0 10px 20px rgba(245,158,11,0.28); }
         body.theme-dark .footer { color: #cbd5e1; }
         body.theme-dark .footer a { color: #93c5fd; }
 
@@ -3066,6 +3350,7 @@ $existingBackups = getExistingBackups();
         body .backup-meta { color: #475569; }
         body .btn-download { box-shadow: 0 10px 20px rgba(22,163,74,0.18); }
         body .btn-delete { box-shadow: 0 10px 20px rgba(185,28,28,0.18); }
+        body .btn-restore { box-shadow: 0 10px 20px rgba(245,158,11,0.18); }
         body .footer { color: #475569; }
         body .footer a { color: #2563eb; }
     </style>
@@ -3161,6 +3446,7 @@ $existingBackups = getExistingBackups();
                             </div>
                             <div class="backup-actions">
                                 <a class="btn-download" href="?action=download&file=<?php echo urlencode($backup['name']); ?>&csrf=<?php echo urlencode($_SESSION['backup_csrf']); ?>">Download</a>
+                                <button class="btn-restore" onclick="restoreBackupFile('<?php echo htmlspecialchars($backup['name']); ?>')">Restore</button>
                                 <button class="btn-delete" onclick="deleteBackupFile('<?php echo htmlspecialchars($backup['name']); ?>')">Delete</button>
                             </div>
                         </div>
@@ -3281,6 +3567,96 @@ $existingBackups = getExistingBackups();
                 }
             })
             .catch(err => alert(err.message));
+
+            return false;
+        }
+
+        function restoreBackupFile(filename) {
+            if (!confirm('Restore will overwrite your database and/or wp-content. Continue?')) return false;
+
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const statusMessage = document.getElementById('statusMessage');
+            const logsContainer = document.getElementById('logsContainer');
+            const logsBox = document.getElementById('logsBox');
+
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '100%';
+            progressBar.innerHTML = '<span class="spinner"></span>';
+            progressBar.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
+            progressText.textContent = 'Restoring backup...';
+            statusMessage.style.display = 'none';
+
+            logsContainer.style.display = 'block';
+            logsBox.innerHTML = '';
+
+            const body = new URLSearchParams();
+            body.set('action', 'restore');
+            body.set('file', filename);
+            body.set('csrf', csrfToken);
+
+            fetch('?action=restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: body.toString()
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data && Array.isArray(data.logs)) {
+                    data.logs.forEach(log => {
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry';
+                        if (String(log).startsWith('ERROR:')) {
+                            logEntry.className += ' error';
+                        } else if (String(log).toLowerCase().includes('completed') || String(log).toLowerCase().includes('restored') || String(log).toLowerCase().includes('success')) {
+                            logEntry.className += ' success';
+                        }
+                        logEntry.textContent = String(log);
+                        logsBox.appendChild(logEntry);
+                    });
+                    logsBox.scrollTop = logsBox.scrollHeight;
+                }
+
+                if (data && data.success) {
+                    progressBar.textContent = 'Done';
+                    progressText.textContent = 'Restore completed';
+
+                    let stats = '';
+                    if (data.statements) stats += `${data.statements} statements, `;
+                    if (data.files) stats += `${data.files} files, `;
+                    if (stats.endsWith(', ')) stats = stats.slice(0, -2);
+
+                    statusMessage.className = 'status-message success';
+                    statusMessage.innerHTML = `
+                        <strong>Success!</strong> Restored: ${data.filename}<br>
+                        ${stats ? '<small>' + stats + '</small><br>' : ''}
+                    `;
+                    statusMessage.style.display = 'block';
+                } else {
+                    progressBar.textContent = 'Error';
+                    progressBar.style.background = '#dc3545';
+                    progressText.textContent = 'Restore failed!';
+
+                    statusMessage.className = 'status-message error';
+                    statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : 'Restore failed'}`;
+                    statusMessage.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                progressBar.textContent = 'Error';
+                progressBar.style.background = '#dc3545';
+                progressText.textContent = 'Restore failed!';
+
+                statusMessage.className = 'status-message error';
+                statusMessage.innerHTML = `<strong>Error:</strong> ${err.message}`;
+                statusMessage.style.display = 'block';
+
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry error';
+                logEntry.textContent = 'ERROR: ' + err.message;
+                logsBox.appendChild(logEntry);
+            });
 
             return false;
         }
