@@ -1210,42 +1210,53 @@ if (isset($_GET['action']) || isset($_POST['action'])) {
         requireCsrf();
     }
 
-    $wpConfig = getWpConfig();
-    
-    // Check if config loaded successfully
-    if (!$wpConfig || empty($wpConfig['DB_NAME']) || empty($wpConfig['DB_USER']) || empty($wpConfig['DB_HOST'])) {
-        respondJson([
-            'success' => false,
-            'error' => 'Failed to load wp-config (or credentials missing)',
-            'logs' => [
-                'ERROR: Could not read wp-config or database settings are incomplete',
-                'Tried: ' . implode(' | ', wpConfigCandidates()),
-                'Detected: ' . ($wpConfig['_source'] ?? 'none'),
-            ]
-        ], 500);
-    }
+    $wpConfig = null;
+    $needsWpConfig = in_array($action, ['backup_database', 'backup_full', 'restore'], true);
+    if ($needsWpConfig) {
+        $wpConfig = getWpConfig();
+        if (!$wpConfig || empty($wpConfig['DB_NAME']) || empty($wpConfig['DB_USER']) || empty($wpConfig['DB_HOST'])) {
+            respondJson([
+                'success' => false,
+                'error' => 'Failed to load wp-config (or credentials missing)',
+                'logs' => [
+                    'ERROR: Could not read wp-config or database settings are incomplete',
+                    'Tried: ' . implode(' | ', wpConfigCandidates()),
+                    'Detected: ' . ($wpConfig['_source'] ?? 'none'),
+                ]
+            ], 500);
+        }
 
-    // Docker configs can "parse" but still be unusable if env vars are not exposed to PHP-FPM (clear_env/etc).
-    if (strcasecmp((string)$wpConfig['DB_USER'], 'example username') === 0 || strcasecmp((string)$wpConfig['DB_PASSWORD'], 'example password') === 0) {
-        $env = dockerEnvStatus();
-        respondJson([
-            'success' => false,
-            'error' => 'Docker wp-config detected but WORDPRESS_DB_* env vars are not available to PHP',
-            'logs' => [
-                'ERROR: wp-config is using getenv_docker(...), but PHP did not receive the environment variables (common with PHP-FPM clear_env).',
-                'Set WORDPRESS_DB_NAME / WORDPRESS_DB_USER / WORDPRESS_DB_PASSWORD / WORDPRESS_DB_HOST for PHP-FPM, or hardcode DB_* in wp-config.',
-                'Detected: ' . ($wpConfig['_source'] ?? 'none'),
-                'Env WORDPRESS_DB_NAME set: ' . ($env['WORDPRESS_DB_NAME']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_NAME']['file_set'] ? 'yes' : 'no'),
-                'Env WORDPRESS_DB_USER set: ' . ($env['WORDPRESS_DB_USER']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_USER']['file_set'] ? 'yes' : 'no'),
-                'Env WORDPRESS_DB_PASSWORD set: ' . ($env['WORDPRESS_DB_PASSWORD']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_PASSWORD']['file_set'] ? 'yes' : 'no'),
-                'Env WORDPRESS_DB_HOST set: ' . ($env['WORDPRESS_DB_HOST']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_HOST']['file_set'] ? 'yes' : 'no'),
-            ],
-        ], 500);
+        // Docker configs can "parse" but still be unusable if env vars are not exposed to PHP-FPM (clear_env/etc).
+        if (strcasecmp((string)$wpConfig['DB_USER'], 'example username') === 0 || strcasecmp((string)$wpConfig['DB_PASSWORD'], 'example password') === 0) {
+            $env = dockerEnvStatus();
+            respondJson([
+                'success' => false,
+                'error' => 'Docker wp-config detected but WORDPRESS_DB_* env vars are not available to PHP',
+                'logs' => [
+                    'ERROR: wp-config is using getenv_docker(...), but PHP did not receive the environment variables (common with PHP-FPM clear_env).',
+                    'Set WORDPRESS_DB_NAME / WORDPRESS_DB_USER / WORDPRESS_DB_PASSWORD / WORDPRESS_DB_HOST for PHP-FPM, or hardcode DB_* in wp-config.',
+                    'Detected: ' . ($wpConfig['_source'] ?? 'none'),
+                    'Env WORDPRESS_DB_NAME set: ' . ($env['WORDPRESS_DB_NAME']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_NAME']['file_set'] ? 'yes' : 'no'),
+                    'Env WORDPRESS_DB_USER set: ' . ($env['WORDPRESS_DB_USER']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_USER']['file_set'] ? 'yes' : 'no'),
+                    'Env WORDPRESS_DB_PASSWORD set: ' . ($env['WORDPRESS_DB_PASSWORD']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_PASSWORD']['file_set'] ? 'yes' : 'no'),
+                    'Env WORDPRESS_DB_HOST set: ' . ($env['WORDPRESS_DB_HOST']['set'] ? 'yes' : 'no') . ' file: ' . ($env['WORDPRESS_DB_HOST']['file_set'] ? 'yes' : 'no'),
+                ],
+            ], 500);
+        }
     }
     
     switch ($action) {
         case 'config_debug':
+            $wpConfig = getWpConfig();
             $masked = $wpConfig;
+            if (!$masked || !is_array($masked)) {
+                $masked = [
+                    'DB_NAME' => '',
+                    'DB_HOST' => '',
+                    'DB_USER' => '',
+                    '_source' => '',
+                ];
+            }
             if (is_array($masked) && isset($masked['DB_PASSWORD']) && $masked['DB_PASSWORD'] !== '') {
                 $masked['DB_PASSWORD'] = '********';
             }
@@ -2619,6 +2630,24 @@ function deleteBackup() {
 }
 
 function uploadBackup(): void {
+    if (empty($_FILES) && isset($_SERVER['CONTENT_LENGTH'])) {
+        $postMaxBytes = iniSizeToBytes((string)ini_get('post_max_size'));
+        $contentLength = (int)$_SERVER['CONTENT_LENGTH'];
+        if ($postMaxBytes > 0 && $contentLength > $postMaxBytes) {
+            $msg = 'POST size exceeds server limit (post_max_size)';
+            respondJson([
+                'success' => false,
+                'error' => $msg,
+                'logs' => [
+                    'ERROR: ' . $msg,
+                    'POST size: ' . formatBytes($contentLength),
+                    'post_max_size: ' . (string)ini_get('post_max_size'),
+                    'upload_max_filesize: ' . (string)ini_get('upload_max_filesize'),
+                ],
+            ], 400);
+        }
+    }
+
     if (!isset($_FILES['backup_file']) || !is_array($_FILES['backup_file'])) {
         respondJson(['success' => false, 'error' => 'No file uploaded', 'logs' => ['ERROR: No file uploaded']], 400);
     }
@@ -4000,8 +4029,26 @@ if ($uploadMaxBytes > 0 && $postMaxBytes > 0) {
                 logsBox.appendChild(logEntry);
             };
 
+            addLogLine(`Upload started: ${file.name} (${formatFileSize(file.size)})`);
+            if (effectiveUploadLimitBytes > 0) {
+                addLogLine(`Server limit: ${formatFileSize(effectiveUploadLimitBytes)}`);
+            }
+
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '?action=upload_backup&csrf=' + encodeURIComponent(csrfToken), true);
+            xhr.timeout = 120000;
+
+            xhr.onloadstart = () => {
+                addLogLine('Upload request opened');
+            };
+
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 2) {
+                    addLogLine('Server responded: headers received');
+                } else if (xhr.readyState === 3) {
+                    addLogLine('Server responded: loading');
+                }
+            };
 
             const progressFallbackTimer = setInterval(() => {
                 if (uploadFinished) {
@@ -4056,6 +4103,28 @@ if ($uploadMaxBytes > 0 && $postMaxBytes > 0) {
                 addLogLine('ERROR: Network error during upload', true);
             };
 
+            xhr.ontimeout = () => {
+                clearInterval(progressFallbackTimer);
+                progressBar.textContent = 'Timeout';
+                progressBar.style.background = '#dc3545';
+                progressText.textContent = 'Upload timed out';
+                statusMessage.className = 'status-message error';
+                statusMessage.innerHTML = '<strong>Error:</strong> Upload timed out';
+                statusMessage.style.display = 'block';
+                addLogLine('ERROR: Upload timed out', true);
+            };
+
+            xhr.onabort = () => {
+                clearInterval(progressFallbackTimer);
+                progressBar.textContent = 'Aborted';
+                progressBar.style.background = '#dc3545';
+                progressText.textContent = 'Upload aborted';
+                statusMessage.className = 'status-message error';
+                statusMessage.innerHTML = '<strong>Error:</strong> Upload aborted';
+                statusMessage.style.display = 'block';
+                addLogLine('ERROR: Upload aborted', true);
+            };
+
             xhr.onload = () => {
                 clearInterval(progressFallbackTimer);
                 let data = null;
@@ -4099,6 +4168,14 @@ if ($uploadMaxBytes > 0 && $postMaxBytes > 0) {
                     if (shortRaw !== '') {
                         addLogLine('ERROR: Server response: ' + shortRaw.replace(/\s+/g, ' '), true);
                     }
+                }
+            };
+
+            xhr.onloadend = () => {
+                if (xhr.status && xhr.status >= 400) {
+                    addLogLine(`ERROR: Upload finished with HTTP ${xhr.status}`, true);
+                } else if (xhr.status) {
+                    addLogLine(`Upload finished with HTTP ${xhr.status}`);
                 }
             };
 
