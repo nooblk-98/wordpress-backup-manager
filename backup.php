@@ -3927,8 +3927,8 @@ $existingBackups = getExistingBackups();
             statusMessage.style.display = 'none';
             logsBox.innerHTML = '';
 
-            progressBar.style.width = '100%';
-            progressBar.innerHTML = '<span class="spinner"></span>';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
             progressBar.style.background = 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)';
             progressText.textContent = 'Uploading backup...';
 
@@ -3937,28 +3937,57 @@ $existingBackups = getExistingBackups();
             body.append('csrf', csrfToken);
             body.append('backup_file', file);
 
-            fetch('?action=upload_backup', {
-                method: 'POST',
-                body
-            })
-            .then(r => r.json())
-            .then(data => {
+            const addLogLine = (text, isError = false) => {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry' + (isError ? ' error' : ' success');
+                logEntry.textContent = String(text);
+                logsBox.appendChild(logEntry);
+            };
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '?action=upload_backup', true);
+
+            xhr.upload.onprogress = (event) => {
+                if (!event.lengthComputable) {
+                    progressBar.style.width = '100%';
+                    progressBar.innerHTML = '<span class="spinner"></span>';
+                    progressText.textContent = 'Uploading backup...';
+                    return;
+                }
+
+                const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = percent + '%';
+                progressText.textContent = `Uploading backup... ${percent}%`;
+            };
+
+            xhr.onerror = () => {
+                progressBar.textContent = 'Error';
+                progressBar.style.background = '#dc3545';
+                progressText.textContent = 'Upload failed';
+                statusMessage.className = 'status-message error';
+                statusMessage.innerHTML = '<strong>Error:</strong> Network error during upload';
+                statusMessage.style.display = 'block';
+                addLogLine('ERROR: Network error during upload', true);
+            };
+
+            xhr.onload = () => {
+                let data = null;
+                try {
+                    data = JSON.parse(xhr.responseText || '{}');
+                } catch (e) {
+                    data = null;
+                }
+
                 if (data && Array.isArray(data.logs)) {
                     data.logs.forEach(log => {
-                        const logEntry = document.createElement('div');
-                        logEntry.className = 'log-entry';
-                        if (String(log).startsWith('ERROR:')) {
-                            logEntry.className += ' error';
-                        } else {
-                            logEntry.className += ' success';
-                        }
-                        logEntry.textContent = String(log);
-                        logsBox.appendChild(logEntry);
+                        addLogLine(log, String(log).startsWith('ERROR:'));
                     });
                 }
 
-                if (data && data.success) {
-                    progressBar.textContent = 'Done';
+                if (xhr.status >= 200 && xhr.status < 300 && data && data.success) {
+                    progressBar.style.width = '100%';
+                    progressBar.textContent = '100%';
                     progressText.textContent = 'Upload completed';
                     statusMessage.className = 'status-message success';
                     statusMessage.innerHTML = `<strong>Success!</strong> Uploaded: ${data.filename}${data.size ? ' (' + data.size + ')' : ''}`;
@@ -3967,28 +3996,21 @@ $existingBackups = getExistingBackups();
                         fileInput.value = '';
                     }
                     setTimeout(() => window.location.reload(), 1200);
-                } else {
-                    progressBar.textContent = 'Error';
-                    progressBar.style.background = '#dc3545';
-                    progressText.textContent = 'Upload failed';
-                    statusMessage.className = 'status-message error';
-                    statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : 'Upload failed'}`;
-                    statusMessage.style.display = 'block';
+                    return;
                 }
-            })
-            .catch(err => {
+
                 progressBar.textContent = 'Error';
                 progressBar.style.background = '#dc3545';
                 progressText.textContent = 'Upload failed';
                 statusMessage.className = 'status-message error';
-                statusMessage.innerHTML = `<strong>Error:</strong> ${err.message}`;
+                statusMessage.innerHTML = `<strong>Error:</strong> ${(data && data.error) ? data.error : 'Upload failed'}`;
                 statusMessage.style.display = 'block';
+                if (!data || !Array.isArray(data.logs)) {
+                    addLogLine('ERROR: Upload failed', true);
+                }
+            };
 
-                const logEntry = document.createElement('div');
-                logEntry.className = 'log-entry error';
-                logEntry.textContent = 'ERROR: ' + err.message;
-                logsBox.appendChild(logEntry);
-            });
+            xhr.send(body);
 
             return false;
         }
