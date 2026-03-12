@@ -25,174 +25,113 @@ process_sql_file() {
   local new_url="$3"
   local output_sql="$4"
 
-  php <<'PHP' "$input_sql" "$old_domain" "$new_url" "$output_sql"
-<?php
-if ($argc < 5) {
-  fwrite(STDERR, "ERROR: Missing args\n");
-  exit(1);
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 command not found" >&2
+    exit 1
+  fi
+
+  python3 - "$input_sql" "$old_domain" "$new_url" "$output_sql" <<'PY'
+import sys
+
+if len(sys.argv) < 5:
+    print("ERROR: Missing args", file=sys.stderr)
+    sys.exit(1)
+
+input_path, old_domain, new_url, output_path = sys.argv[1:5]
+old_domain = old_domain.strip()
+new_url = new_url.strip().rstrip('/')
+
+if not old_domain or not new_url:
+    print("ERROR: old-domain and new-url are required", file=sys.stderr)
+    sys.exit(1)
+
+if not (new_url.startswith("http://") or new_url.startswith("https://")):
+    print("ERROR: new-url must start with http:// or https://", file=sys.stderr)
+    sys.exit(1)
+
+replacements = {
+    f"http://{old_domain}": new_url,
+    f"https://{old_domain}": new_url,
 }
 
-$input = $argv[1];
-$oldDomain = trim((string)$argv[2]);
-$newUrl = rtrim(trim((string)$argv[3]), '/');
-$output = $argv[4];
+with open(input_path, "r", encoding="utf-8", errors="replace") as fh:
+    sql = fh.read()
 
-if ($oldDomain === '' || $newUrl === '') {
-  fwrite(STDERR, "ERROR: old-domain and new-url are required\n");
-  exit(1);
-}
+def unescape_mysql_single_quoted(s: str) -> str:
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = s[i + 1]
+            if nxt == "0": out.append("\0")
+            elif nxt == "n": out.append("\n")
+            elif nxt == "r": out.append("\r")
+            elif nxt == "t": out.append("\t")
+            elif nxt == "b": out.append("\x08")
+            elif nxt == "Z": out.append("\x1A")
+            elif nxt in ["'", '"', "\\"]: out.append(nxt)
+            else: out.append(nxt)
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
-if (!preg_match('#^https?://#i', $newUrl)) {
-  fwrite(STDERR, "ERROR: new-url must start with http:// or https://\n");
-  exit(1);
-}
+def escape_mysql_single_quoted(s: str) -> str:
+    s = s.replace("\\", "\\\\")
+    s = s.replace("\0", "\\0")
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", "\\r")
+    s = s.replace("\x1A", "\\Z")
+    s = s.replace("'", "\\'")
+    return s
 
-$replaceMap = [
-  'http://' . $oldDomain => $newUrl,
-  'https://' . $oldDomain => $newUrl,
-];
+def apply_replacements(s: str):
+    original = s
+    for src, dst in replacements.items():
+        s = s.replace(src, dst)
+    return s, int(s != original)
 
-$sql = file_get_contents($input);
-if ($sql === false) {
-  fwrite(STDERR, "ERROR: Failed to read SQL file\n");
-  exit(1);
-}
+out = []
+i = 0
+n = len(sql)
+changed_values = 0
 
-function replaceRecursive($value, array $replaceMap, int &$changes) {
-  if (is_string($value)) {
-    $updated = strtr($value, $replaceMap);
-    if ($updated !== $value) {
-      $changes++;
-    }
-    return $updated;
-  }
-  if (is_array($value)) {
-    foreach ($value as $k => $v) {
-      $value[$k] = replaceRecursive($v, $replaceMap, $changes);
-    }
-    return $value;
-  }
-  if (is_object($value)) {
-    foreach (get_object_vars($value) as $k => $v) {
-      $value->$k = replaceRecursive($v, $replaceMap, $changes);
-    }
-    return $value;
-  }
-  return $value;
-}
+while i < n:
+    ch = sql[i]
+    if ch != "'":
+        out.append(ch)
+        i += 1
+        continue
 
-function replaceInScalar(string $value, array $replaceMap, int &$changedValues): string {
-  if ($value === '') {
-    return $value;
-  }
+    i += 1
+    raw = []
+    while i < n:
+        c = sql[i]
+        if c == "\\" and i + 1 < n:
+            raw.append(c)
+            raw.append(sql[i + 1])
+            i += 2
+            continue
+        if c == "'":
+            i += 1
+            break
+        raw.append(c)
+        i += 1
 
-  $serialized = @unserialize($value, ['allowed_classes' => false]);
-  if ($serialized !== false || $value === 'b:0;') {
-    $inner = 0;
-    $updated = replaceRecursive($serialized, $replaceMap, $inner);
-    if ($inner > 0) {
-      $changedValues++;
-      return serialize($updated);
-    }
-    return $value;
-  }
+    decoded = unescape_mysql_single_quoted("".join(raw))
+    updated, changed = apply_replacements(decoded)
+    changed_values += changed
+    out.append("'" + escape_mysql_single_quoted(updated) + "'")
 
-  $json = json_decode($value, true);
-  if (json_last_error() === JSON_ERROR_NONE && (is_array($json) || is_object($json) || is_string($json))) {
-    $inner = 0;
-    $updated = replaceRecursive($json, $replaceMap, $inner);
-    if ($inner > 0) {
-      $encoded = json_encode($updated, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-      if ($encoded !== false) {
-        $changedValues++;
-        return $encoded;
-      }
-    }
-  }
+with open(output_path, "w", encoding="utf-8") as fh:
+    fh.write("".join(out))
 
-  $updated = strtr($value, $replaceMap);
-  if ($updated !== $value) {
-    $changedValues++;
-  }
-  return $updated;
-}
-
-function unescapeMySqlSingleQuoted(string $literal): string {
-  $out = '';
-  $len = strlen($literal);
-  for ($i = 0; $i < $len; $i++) {
-    $ch = $literal[$i];
-    if ($ch === "\\" && $i + 1 < $len) {
-      $n = $literal[$i + 1];
-      if ($n === '0') { $out .= "\0"; $i++; continue; }
-      if ($n === 'n') { $out .= "\n"; $i++; continue; }
-      if ($n === 'r') { $out .= "\r"; $i++; continue; }
-      if ($n === 't') { $out .= "\t"; $i++; continue; }
-      if ($n === 'b') { $out .= "\x08"; $i++; continue; }
-      if ($n === 'Z') { $out .= "\x1A"; $i++; continue; }
-      if ($n === "'" || $n === '"' || $n === "\\") { $out .= $n; $i++; continue; }
-      $out .= $n;
-      $i++;
-      continue;
-    }
-    $out .= $ch;
-  }
-  return $out;
-}
-
-function escapeMySqlSingleQuoted(string $value): string {
-  $value = str_replace("\\", "\\\\", $value);
-  $value = str_replace("\0", "\\0", $value);
-  $value = str_replace("\n", "\\n", $value);
-  $value = str_replace("\r", "\\r", $value);
-  $value = str_replace("\x1A", "\\Z", $value);
-  $value = str_replace("'", "\\'", $value);
-  return $value;
-}
-
-$out = '';
-$len = strlen($sql);
-$i = 0;
-$changedValues = 0;
-
-while ($i < $len) {
-  $ch = $sql[$i];
-  if ($ch !== "'") {
-    $out .= $ch;
-    $i++;
-    continue;
-  }
-
-  $i++;
-  $raw = '';
-  while ($i < $len) {
-    $c = $sql[$i];
-    if ($c === "\\" && $i + 1 < $len) {
-      $raw .= $c . $sql[$i + 1];
-      $i += 2;
-      continue;
-    }
-    if ($c === "'") {
-      $i++;
-      break;
-    }
-    $raw .= $c;
-    $i++;
-  }
-
-  $decoded = unescapeMySqlSingleQuoted($raw);
-  $updated = replaceInScalar($decoded, $replaceMap, $changedValues);
-  $out .= "'" . escapeMySqlSingleQuoted($updated) . "'";
-}
-
-if (file_put_contents($output, $out) === false) {
-  fwrite(STDERR, "ERROR: Failed to write output SQL file\n");
-  exit(1);
-}
-
-fwrite(STDOUT, "Done. Updated scalar values: {$changedValues}\n");
-fwrite(STDOUT, "Output: {$output}\n");
-PHP
+print(f"Done. Updated scalar values: {changed_values}")
+print(f"Output: {output_path}")
+PY
 }
 
 process_zip_file() {
@@ -212,8 +151,7 @@ process_zip_file() {
 
   local tmp_dir
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t url-replace)"
-  cleanup() { rm -rf "$tmp_dir"; }
-  trap cleanup EXIT
+  trap 'rm -rf -- "$tmp_dir"' RETURN
 
   echo "Extracting: $input_zip"
   unzip -q "$input_zip" -d "$tmp_dir"
@@ -237,6 +175,7 @@ process_zip_file() {
   )
   cp -f "$tmp_zip" "$output_zip"
   echo "Done: $output_zip"
+  trap - RETURN
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
