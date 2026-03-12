@@ -38,9 +38,9 @@ wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/h
 
 ```
 
-dev
+url_replace.sh
 ```bash
-wget  https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/dev/backup.php
+wget https://raw.githubusercontent.com/nooblk-98/wordpress-backup-manager/refs/heads/dev/src/url_replace.sh
 ```
 ## else
 
