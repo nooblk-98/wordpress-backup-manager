@@ -3227,18 +3227,21 @@ $existingBackups = getExistingBackups();
             background: #16a34a;
             color: #fff;
             box-shadow: 0 10px 20px rgba(22, 163, 74, 0.18);
+            cursor: pointer;
         }
 
         .btn-delete {
             background: #b91c1c;
             color: #fff;
             box-shadow: 0 10px 20px rgba(185, 28, 28, 0.18);
+            cursor: default;
         }
 
         .btn-restore {
             background: #f59e0b;
             color: #111827;
             box-shadow: 0 10px 20px rgba(245, 158, 11, 0.18);
+            cursor: default;
         }
 
         .btn-download:hover, .btn-delete:hover, .btn-restore:hover { transform: translateY(-1px); }
